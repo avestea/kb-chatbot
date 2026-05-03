@@ -7,7 +7,8 @@ A SaaS knowledge base chatbot builder. Operators upload documents; end-users cha
 ```bash
 cp .env.example .env
 docker compose up -d
-curl localhost:8000/health   # → {"status":"ok"}
+docker compose exec api alembic upgrade head
+curl localhost:8000/health   # → {"status":"ok","db":"connected","redis":"connected"}
 # Gradio UI: http://localhost:7860
 # MinIO console: http://localhost:9001  (minioadmin / minioadmin)
 ```

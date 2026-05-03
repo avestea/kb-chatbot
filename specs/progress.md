@@ -19,7 +19,7 @@ A SaaS knowledge base chatbot builder in Python. Operators upload documents (PDF
 | Slice | Title | Status | Notes |
 |---|---|---|---|
 | 0 | Docker / Dev Environment | **Done** | All containers healthy. See deviations below. |
-| 1 | FastAPI Scaffold + DB Schema | Not started | |
+| 1 | FastAPI Scaffold + DB Schema | **Done** | `/health` returns `{"status":"ok","db":"connected","redis":"connected"}`; all 6 tables + HNSW index created via Alembic. |
 | 2 | Auth & Multi-Tenancy | Not started | |
 | 3 | Chatbot CRUD | Not started | |
 | 4 | Document Upload | Not started | |
@@ -51,14 +51,26 @@ infra/minio/init.sh         creates kbchat-dev bucket on first boot
 Makefile                    up / down / logs / psql / redis-cli / sh-api / migrate / rebuild
 ```
 
-### API skeleton (stub — will be replaced/expanded by Slice 1)
+### API (Slice 1)
 
 ```
 api/Dockerfile              multi-stage: base → dev → prod
-api/pyproject.toml          full dependency list for all slices pre-declared
+api/pyproject.toml          hatchling build backend; full dependency list for all slices
+api/alembic.ini             points sqlalchemy.url at %(DATABASE_URL)s env var
+api/alembic/env.py          async migration env (create_async_engine + asyncio.run)
+api/alembic/versions/0001_init.py   all tables + FK constraints + HNSW index on chunks.embedding
 api/src/__init__.py         empty
-api/src/main.py             FastAPI app with one route: GET /health → {"status":"ok"}
+api/src/main.py             FastAPI app: lifespan, ApiError handler, generic 500 handler, /health
 api/src/worker.py           ARQ WorkerSettings with a noop function placeholder
+api/src/config/env.py       pydantic-settings: DATABASE_URL, REDIS_URL, S3_*, OPENAI/ANTHROPIC keys, AUTH_MODE
+api/src/db/base.py          async engine + async_session_factory + get_db() dependency
+api/src/db/models.py        Tenant, Chatbot, Document, Chunk, Conversation, Message ORM models
+api/src/lib/log.py          structlog configured with PrintLoggerFactory; exports module-level `log`
+api/src/lib/errors.py       ApiError + subclasses (400/401/403/404/409/413/415/422/429)
+api/src/lib/s3.py           get_s3_client() asynccontextmanager wrapping aioboto3
+api/src/lib/redis.py        get_redis_client() lazy singleton (redis.asyncio)
+api/tests/conftest.py       event_loop + db_session (pytest_asyncio) + models fixtures
+api/tests/factories/        TenantFactory, ChatbotFactory, DocumentFactory, MessageFactory
 ```
 
 ### Web skeleton (stub — will be replaced by Slice 9)
@@ -72,7 +84,10 @@ web/app.py                  minimal Gradio block, serves on :7860
 ### Running state
 
 `docker compose up -d` brings all 7 services up healthy. Verified:
-- `curl localhost:8000/health` → `{"status":"ok"}`
+- `curl localhost:8000/health` → `{"status":"ok","db":"connected","redis":"connected"}`
+- `docker compose exec api alembic upgrade head` creates all 6 tables + HNSW index cleanly
+- `docker compose exec postgres psql -U postgres -c "\dt"` shows: tenants, chatbots, documents, chunks, conversations, messages
+- `docker compose exec postgres psql -U postgres -c "\d chunks"` confirms `embedding vector(1536)` and `chunks_embedding_hnsw` HNSW index
 - `docker compose exec postgres psql -U postgres -c "\dx"` lists `vector` extension (pgvector 0.8.2)
 - MinIO bucket `kbchat-dev` exists (console at http://localhost:9001, user/pass: minioadmin)
 - Volumes persist across `docker compose down && docker compose up -d`
@@ -99,11 +114,29 @@ RUN mkdir -p src && pip install --no-cache-dir -e ".[dev]"
 **Actual:** `functions = [noop]` instead of `functions = []`  
 **Why:** ARQ raises `RuntimeError: at least one function or cron_job must be registered` with an empty list. Replace `noop` with real job functions in Slice 5 — do not keep it.
 
-### 3. `api/pyproject.toml` — build backend
+### 3. `api/pyproject.toml` — build backend is hatchling (Slice 1 supersedes Slice 0)
 
-**Spec:** Not specified.  
-**Actual:** `build-backend = "setuptools.build_meta"`  
-**Why:** `setuptools.backends.legacy:build` (an incorrect variant) causes `BackendUnavailable` during the Docker build. `setuptools.build_meta` is the correct identifier.
+**Slice 0 used:** `build-backend = "setuptools.build_meta"` (setuptools worked around a BackendUnavailable error)  
+**Slice 1 replaced with:** `build-backend = "hatchling.build"` per the Slice 1 spec.  
+**Current state:** hatchling. The `mkdir -p src` line in `api/Dockerfile` is retained as a harmless no-op (hatchling doesn't need it, but it doesn't hurt either).
+
+### 4. `api/src/lib/log.py` — `add_logger_name` omitted
+
+**Spec:** structlog configured (no specific processor list mandated).  
+**Actual:** `structlog.stdlib.add_logger_name` is NOT in the processor chain.  
+**Why:** `add_logger_name` reads `logger.name` which only exists on stdlib `Logger` objects. With `PrintLoggerFactory`, it raises `AttributeError: 'PrintLogger' object has no attribute 'name'` and crashes the server on startup. Do not add it back unless switching to a stdlib logger factory.
+
+### 5. `api/src/lib/s3.py` — `get_s3_client()` is an async context manager
+
+**Spec:** "aioboto3 session singleton".  
+**Actual:** `get_s3_client()` is decorated with `@asynccontextmanager`.  
+**Why:** aioboto3 clients must be used as async context managers — `await session.client(...)` returns an internal `_AsyncClientCreator`, not the actual client. All callers must use `async with get_s3_client() as client:`.
+
+### 6. `api/tests/factories/` — package, not flat file
+
+**Spec:** `api/tests/factories.py`  
+**Actual:** `api/tests/factories/__init__.py`  
+**Why:** implemented as a package directory. Imports work identically: `from tests.factories import TenantFactory`.
 
 ---
 
@@ -134,19 +167,10 @@ Auth is in demo mode (`AUTH_MODE=demo`). Any Bearer token value works. `Authoriz
 
 ## Next Step
 
-Implement **Slice 1 — FastAPI Scaffold + DB Schema**.
+Implement **Slice 2 — Auth & Multi-Tenancy**.
 
 Prompt:
 ```
-Read specs/slices/00-prompt-prefix.md then implement: Slice 1 — FastAPI Scaffold + DB Schema
-(specs/slices/slice-01-scaffold.md)
+Read specs/slices/00-prompt-prefix.md then implement: Slice 2 — Auth & Multi-Tenancy
+(specs/slices/slice-02-auth.md)
 ```
-
-Slice 1 will:
-- Replace `api/src/main.py` stub with a real FastAPI app (lifespan, middleware, exception handlers, structlog, Prometheus)
-- Create all SQLAlchemy ORM models in `api/src/db/models.py`
-- Create `api/src/db/base.py` (async engine + session factory)
-- Create `api/src/config/env.py` (pydantic-settings)
-- Create `api/src/lib/` utilities (log, s3, redis, errors)
-- Set up Alembic and generate the initial migration
-- Create `api/tests/conftest.py` and `api/tests/factories.py`
