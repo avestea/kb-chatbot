@@ -108,10 +108,15 @@ class Message(BaseModel):
 | 9 | Gradio UI | Python dashboard: chatbot mgmt + doc upload + chat |
 | 10 | Explainability | Sources panel: which chunks answered the question + similarity scores |
 | 11 | Evaluation Dashboard | No-answer rate, failure browser, conversation inspector |
+| 12 | Hybrid Search | BM25 + vector search merged with Reciprocal Rank Fusion |
+| 13 | Query Rewriting | Rewrite follow-up questions into self-contained retrieval queries |
+| 14 | Feedback | Thumbs up/down per answer; satisfaction rate in evaluation dashboard |
 
 **Minimum viable product:** Slices 0–9. After these, you have a working RAG chatbot with a Python UI.
 
 **Recommended next layer:** Slices 10–11 add observability into answer quality with no new infrastructure.
+
+**Quality layer:** Slices 12–14 improve retrieval accuracy and collect user signal.
 
 ---
 
@@ -129,7 +134,10 @@ Slice 0  (Docker)
                                              └── Slice 8  (chat endpoint)
                                                    └── Slice 9  (Gradio UI)
                                                          ├── Slice 10 (explainability)
-                                                         └── Slice 11 (evaluation dashboard) — needs Slice 10
+                                                         │     └── Slice 11 (evaluation dashboard) — needs Slice 10
+                                                         │           └── Slice 14 (feedback) — extends Slice 11
+                                                         ├── Slice 12 (hybrid search) — extends Slice 7
+                                                         └── Slice 13 (query rewriting) — extends Slice 8
 ```
 
 ---
