@@ -22,7 +22,7 @@ A SaaS knowledge base chatbot builder in Python. Operators upload documents (PDF
 | 1 | FastAPI Scaffold + DB Schema | **Done** | `/health` returns `{"status":"ok","db":"connected","redis":"connected"}`; all 6 tables + HNSW index created via Alembic. |
 | 2 | Auth & Multi-Tenancy | **Done** | Demo mode fully working; all 8 AC tests pass. See deviations below. |
 | 3 | Chatbot CRUD | **Done** | Full CRUD; 18 tests pass. See deviations below. |
-| 4 | Document Upload | Not started | |
+| 4 | Document Upload | **Done** | 18/18 tests pass. S3 + ARQ mocked in tests. See deviations below. |
 | 5 | Parsing Worker | Not started | |
 | 6 | Chunk + Embed + Persist | Not started | |
 | 7 | Retrieval Function | Not started | |
@@ -50,6 +50,29 @@ infra/minio/init.sh         creates kbchat-dev bucket on first boot
 .env.example                same keys, placeholder values
 Makefile                    up / down / logs / psql / redis-cli / sh-api / migrate / rebuild
 ```
+
+### Document Upload (Slice 4)
+
+```
+api/src/lib/s3.py               Updated: module-level Session singleton; exports s3_client() per cross-slice contract
+api/src/lib/redis.py            Updated: added get_arq_pool() ARQ connection pool singleton
+api/src/schemas/documents.py    DocumentResponse, DocumentListResponse
+api/src/routes/documents.py     POST/GET/DELETE under /api/v1/chatbots/{chatbot_id}/documents
+api/src/main.py                 Registered documents_router under /api/v1
+api/tests/test_documents.py     18 tests covering all ACs
+```
+
+Verified ACs:
+- `POST /api/v1/chatbots/:id/documents` with PDF → 201 `{"document": {..., "status": "pending"}}`, S3 put called, ARQ job enqueued
+- File > 20 MB → 413 `payload_too_large`
+- Unsupported MIME (e.g. `image/png`) → 415 `unsupported_media_type`
+- `GET /api/v1/chatbots/:id/documents` → `{"items":[...],"total":N,"has_more":bool}`
+- `GET` with `limit=200` → 422
+- `DELETE /:chatbot_id/documents/:doc_id` → 204, S3 delete called, chunks hard-deleted, document soft-deleted
+- Upload/list/delete against another tenant's chatbot → 404
+- No `Authorization` header → 401
+
+---
 
 ### Chatbot CRUD (Slice 3)
 
@@ -166,11 +189,10 @@ RUN mkdir -p src && pip install --no-cache-dir -e ".[dev]"
 **Actual:** `structlog.stdlib.add_logger_name` is NOT in the processor chain.  
 **Why:** `add_logger_name` reads `logger.name` which only exists on stdlib `Logger` objects. With `PrintLoggerFactory`, it raises `AttributeError: 'PrintLogger' object has no attribute 'name'` and crashes the server on startup. Do not add it back unless switching to a stdlib logger factory.
 
-### 5. `api/src/lib/s3.py` — `get_s3_client()` is an async context manager
+### 5. `api/src/lib/s3.py` — module-level session + `s3_client()` function (Slice 4 updated)
 
-**Spec:** "aioboto3 session singleton".  
-**Actual:** `get_s3_client()` is decorated with `@asynccontextmanager`.  
-**Why:** aioboto3 clients must be used as async context managers — `await session.client(...)` returns an internal `_AsyncClientCreator`, not the actual client. All callers must use `async with get_s3_client() as client:`.
+**Original Slice 1:** `get_s3_client()` decorated with `@asynccontextmanager`, creating a new session each call.  
+**Slice 4 replacement:** matches the spec exactly — `_session` is a module-level `aioboto3.Session` singleton; `s3_client()` is a plain function that returns `_session.client("s3", **kwargs)`, which aioboto3 natively makes an async context manager. Usage: `async with s3_client() as s3: ...`
 
 ### 7. `api/src/routes/chatbots.py` — stub created in Slice 2 for AC testing
 
@@ -222,10 +244,10 @@ Auth is in demo mode (`AUTH_MODE=demo`). Any Bearer token value works. `Authoriz
 
 ## Next Step
 
-Implement **Slice 4 — Document Upload**.
+Implement **Slice 5 — Parsing Worker**.
 
 Prompt:
 ```
-Read specs/slices/00-prompt-prefix.md then implement: Slice 4 — Document Upload
-(specs/slices/slice-04-document-upload.md)
+Read specs/slices/00-prompt-prefix.md then implement: Slice 5 — Parsing Worker
+(specs/slices/slice-05-parsing-worker.md)
 ```

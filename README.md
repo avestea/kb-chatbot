@@ -21,6 +21,17 @@ curl -X POST localhost:8000/api/v1/chatbots \
   -d '{"name":"My Bot","system_prompt_override":"Be concise."}'
 # → 201 {"chatbot": {"id": "...", "name": "My Bot", ...}}
 
+# Document Upload (Slice 4):
+BOT_ID="<id from above>"
+curl -X POST "localhost:8000/api/v1/chatbots/$BOT_ID/documents" \
+  -H "Authorization: Bearer alice" \
+  -F "file=@/path/to/doc.pdf"
+# → 201 {"document": {"id": "...", "status": "pending", ...}}
+
+curl "localhost:8000/api/v1/chatbots/$BOT_ID/documents" \
+  -H "Authorization: Bearer alice"
+# → {"items": [...], "total": 1, "has_more": false}
+
 # Gradio UI: http://localhost:7860
 # MinIO console: http://localhost:9001  (minioadmin / minioadmin)
 ```
