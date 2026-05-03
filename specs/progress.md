@@ -20,7 +20,7 @@ A SaaS knowledge base chatbot builder in Python. Operators upload documents (PDF
 |---|---|---|---|
 | 0 | Docker / Dev Environment | **Done** | All containers healthy. See deviations below. |
 | 1 | FastAPI Scaffold + DB Schema | **Done** | `/health` returns `{"status":"ok","db":"connected","redis":"connected"}`; all 6 tables + HNSW index created via Alembic. |
-| 2 | Auth & Multi-Tenancy | Not started | |
+| 2 | Auth & Multi-Tenancy | **Done** | Demo mode fully working; all 8 AC tests pass. See deviations below. |
 | 3 | Chatbot CRUD | Not started | |
 | 4 | Document Upload | Not started | |
 | 5 | Parsing Worker | Not started | |
@@ -50,6 +50,27 @@ infra/minio/init.sh         creates kbchat-dev bucket on first boot
 .env.example                same keys, placeholder values
 Makefile                    up / down / logs / psql / redis-cli / sh-api / migrate / rebuild
 ```
+
+### Auth (Slice 2)
+
+```
+api/src/lib/cache.py            SimpleCache — generic TTL in-memory LRU cache
+api/src/db/tenant_scope.py      tenant_where() — locked cross-slice SQL helper
+api/src/auth/__init__.py        empty package marker
+api/src/auth/clerk.py           verify_token() + get_or_create_tenant(); demo + clerk modes
+api/src/auth/authenticate.py    get_current_tenant() FastAPI Depends; AuthenticatedTenant dataclass
+api/src/auth/webhook.py         POST /webhooks/clerk — acks in demo mode, svix-verified in clerk mode
+api/src/routes/__init__.py      empty package marker
+api/src/routes/chatbots.py      GET /api/v1/chatbots stub (minimal list; full CRUD comes in Slice 3)
+api/tests/test_auth.py          8 tests covering: 401 on no token, auto-create, isolation, idempotency,
+                                empty-token, clerk-mode invalid JWT, cross-tenant scope, webhook ACK
+```
+
+Verified:
+- `curl localhost:8000/api/v1/chatbots -H "Authorization: Bearer alice"` → 200 + starter chatbot
+- `curl localhost:8000/api/v1/chatbots -H "Authorization: Bearer bob"` → different tenant_id
+- `curl localhost:8000/api/v1/chatbots` (no header) → 401
+- `docker compose exec api python3 -m pytest tests/test_auth.py` → 8 passed
 
 ### API (Slice 1)
 
@@ -132,6 +153,21 @@ RUN mkdir -p src && pip install --no-cache-dir -e ".[dev]"
 **Actual:** `get_s3_client()` is decorated with `@asynccontextmanager`.  
 **Why:** aioboto3 clients must be used as async context managers — `await session.client(...)` returns an internal `_AsyncClientCreator`, not the actual client. All callers must use `async with get_s3_client() as client:`.
 
+### 7. `api/src/routes/chatbots.py` — stub created in Slice 2 for AC testing
+
+**Spec:** `GET /api/v1/chatbots` is an AC for Slice 2 but the chatbot CRUD router is a Slice 3 deliverable.  
+**Actual:** A minimal `GET /api/v1/chatbots` list endpoint was created in Slice 2 to satisfy the AC. It uses `tenant_where()` and `get_current_tenant`. Slice 3 will expand this file to full CRUD.
+
+### 8. `api/pyproject.toml` — `[dependency-groups]` changed to `[project.optional-dependencies]`
+
+**Spec:** `[dependency-groups]` (PEP 735) for dev dependencies.  
+**Actual:** Changed to `[project.optional-dependencies]` so `pip install -e ".[dev]"` in the Dockerfile resolves pytest and other dev tools. PEP 735 dependency groups are not resolved by pip's extras syntax.
+
+### 9. `pyproject.toml` — pytest asyncio loop scope set to session
+
+**Spec:** Not specified.  
+**Actual:** Added `asyncio_default_fixture_loop_scope = "session"` and `asyncio_default_test_loop_scope = "session"` to `[tool.pytest.ini_options]`. Required because the SQLAlchemy asyncpg connection pool binds to the first event loop it encounters; per-test (function-scoped) loops cause "Event loop is closed" errors on the pool's connection cleanup. All async tests must share one session-scoped event loop.
+
 ### 6. `api/tests/factories/` — package, not flat file
 
 **Spec:** `api/tests/factories.py`  
@@ -167,10 +203,13 @@ Auth is in demo mode (`AUTH_MODE=demo`). Any Bearer token value works. `Authoriz
 
 ## Next Step
 
-Implement **Slice 2 — Auth & Multi-Tenancy**.
+Implement **Slice 3 — Chatbot CRUD**.
 
 Prompt:
 ```
-Read specs/slices/00-prompt-prefix.md then implement: Slice 2 — Auth & Multi-Tenancy
-(specs/slices/slice-02-auth.md)
+Read specs/slices/00-prompt-prefix.md then implement: Slice 3 — Chatbot CRUD
+(specs/slices/slice-03-chatbot-crud.md)
+
+Note: api/src/routes/chatbots.py already exists with a minimal GET /chatbots stub
+from Slice 2. Slice 3 should replace/expand that file with full CRUD.
 ```

@@ -2,6 +2,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from src.lib.log import log
 from src.lib.errors import ApiError
 from src.db.base import engine
@@ -9,7 +10,7 @@ from src.db.base import engine
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     log.info("api starting")
-    
+
     try:
         yield
     finally:
@@ -18,6 +19,13 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan, title="KBChat API", version="0.1.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.exception_handler(ApiError)
@@ -36,6 +44,13 @@ async def generic_error_handler(request: Request, exc: Exception):
         status_code=500,
         content={"error": {"code": "internal_error", "message": "An unexpected error occurred"}}
     )
+
+
+from src.auth.webhook import router as webhook_router
+from src.routes.chatbots import router as chatbots_router
+
+app.include_router(webhook_router)
+app.include_router(chatbots_router, prefix="/api/v1")
 
 
 @app.get("/health")

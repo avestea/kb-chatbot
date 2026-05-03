@@ -9,6 +9,11 @@ cp .env.example .env
 docker compose up -d
 docker compose exec api alembic upgrade head
 curl localhost:8000/health   # → {"status":"ok","db":"connected","redis":"connected"}
+
+# Auth is in demo mode — any Bearer token works:
+curl localhost:8000/api/v1/chatbots -H "Authorization: Bearer alice"
+# → 200 with a starter chatbot auto-created for tenant "alice"
+
 # Gradio UI: http://localhost:7860
 # MinIO console: http://localhost:9001  (minioadmin / minioadmin)
 ```
@@ -57,7 +62,17 @@ docker compose down -v --remove-orphans && docker compose build --no-cache && do
 
 Set `AUTH_MODE=demo` in `.env` (default). Any Bearer token works — `Authorization: Bearer alice` auto-creates a tenant named "alice".
 
-For production: set `AUTH_MODE=clerk` and fill in `CLERK_SECRET_KEY` / `CLERK_WEBHOOK_SECRET`.
+For production:
+
+1. Create a Clerk application at [clerk.com](https://clerk.com) and copy the Secret Key and Webhook Secret.
+2. Set in `.env`:
+   ```
+   AUTH_MODE=clerk
+   CLERK_SECRET_KEY=sk_live_...
+   CLERK_WEBHOOK_SECRET=whsec_...
+   ```
+3. Implement `api/src/lib/clerk_jwks.py` — the stub exists but raises `NotImplementedError`. Fill in the JWKS fetch from `https://api.clerk.com/v1/jwks` and return the matching signing key for `jwt.decode`.
+4. Point the Clerk dashboard webhook at `POST https://yourdomain.com/webhooks/clerk`.
 
 ## Ports
 
