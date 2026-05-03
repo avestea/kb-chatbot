@@ -106,19 +106,21 @@ For production:
 ## Project Structure
 
 ```
-api/                  FastAPI app + ARQ worker
-  src/main.py         App entrypoint
-  src/worker.py       ARQ worker entrypoint
-  pyproject.toml      Dependencies
-web/                  Gradio UI
-  app.py              UI entrypoint
+api/                          FastAPI app + ARQ worker
+  src/main.py                 App entrypoint
+  src/worker/__init__.py      ARQ WorkerSettings entrypoint
+  src/worker/jobs.py          ARQ job: ingest_document
+  src/worker/parsers/         PDF / DOCX / HTML / TXT parsers
+  pyproject.toml              Dependencies
+web/                          Gradio UI
+  app.py                      UI entrypoint
 infra/
-  postgres/init.sql   Enables pgvector extension
-  minio/init.sh       Creates kbchat-dev bucket
+  postgres/init.sql           Enables pgvector extension
+  minio/init.sh               Creates kbchat-dev bucket
 specs/
-  kb-chatbot-architecture.md   Full architecture reference
-  progress.md                  Implementation status + LLM handoff notes
-  slices/                      Slice-by-slice implementation prompts
+  kb-chatbot-architecture.md  Full architecture reference
+  progress.md                 Implementation status + LLM handoff notes
+  slices/                     Slice-by-slice implementation prompts
 ```
 
 ## Implementation Status

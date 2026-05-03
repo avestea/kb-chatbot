@@ -10,6 +10,7 @@ engine = create_async_engine(
     pool_pre_ping=True,
 )
 async_session_factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+async_session = async_session_factory
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:

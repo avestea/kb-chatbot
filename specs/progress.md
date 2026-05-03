@@ -23,7 +23,7 @@ A SaaS knowledge base chatbot builder in Python. Operators upload documents (PDF
 | 2 | Auth & Multi-Tenancy | **Done** | Demo mode fully working; all 8 AC tests pass. See deviations below. |
 | 3 | Chatbot CRUD | **Done** | Full CRUD; 18 tests pass. See deviations below. |
 | 4 | Document Upload | **Done** | 18/18 tests pass. S3 + ARQ mocked in tests. See deviations below. |
-| 5 | Parsing Worker | Not started | |
+| 5 | Parsing Worker | **Done** | 17/17 tests pass. Worker boots and registers `ingest_document`. See deviations below. |
 | 6 | Chunk + Embed + Persist | Not started | |
 | 7 | Retrieval Function | Not started | |
 | 8 | Chat Endpoint | Not started | |
@@ -50,6 +50,30 @@ infra/minio/init.sh         creates kbchat-dev bucket on first boot
 .env.example                same keys, placeholder values
 Makefile                    up / down / logs / psql / redis-cli / sh-api / migrate / rebuild
 ```
+
+### Parsing Worker (Slice 5)
+
+```
+api/src/worker/__init__.py          WorkerSettings (functions=[ingest_document], max_jobs=1, job_timeout=600)
+api/src/worker/jobs.py              ingest_document ARQ job: S3 download → parse → status transitions
+api/src/worker/parsers/__init__.py  get_parser_for() MIME dispatch; raises UnsupportedMimeTypeError on unknown
+api/src/worker/parsers/pdf.py       pdfplumber-based PDF → text
+api/src/worker/parsers/docx.py      python-docx DOCX → text
+api/src/worker/parsers/html.py      BeautifulSoup4 + lxml HTML → text (strips script/style/nav/footer/header)
+api/src/worker/parsers/txt.py       UTF-8 decode (errors=replace)
+api/src/db/base.py                  Added: async_session = async_session_factory alias
+api/tests/test_worker.py            17 tests: parser units, dispatch, job integration (real DB + mocked S3)
+```
+
+Verified ACs:
+- Worker boots via `docker compose up worker`: logs `Starting worker for 1 functions: ingest_document`
+- TXT/HTML documents: status transitions from `pending` → `processing` after `ingest_document` runs
+- Corrupt PDF: `Document.status` → `error` with `error_reason` populated; worker keeps running
+- Unsupported MIME: status `error` set; no `Retry` raised (permanent failure)
+- Parse error on tries 1–2: `Retry` raised (deferred 5s / 25s); try 3: `error` set, no retry
+- Missing document: returns silently, no crash
+
+---
 
 ### Document Upload (Slice 4)
 
@@ -171,11 +195,11 @@ RUN mkdir -p src && pip install --no-cache-dir -e ".[dev]"
 ```
 **Why:** setuptools editable install needs the `src/` directory to exist at build time so it can register the package. Without it, the install fails. In dev the real source is bind-mounted over `/app` at runtime — `mkdir -p src` just creates an empty placeholder for the build step.
 
-### 2. `api/src/worker.py` — noop function in WorkerSettings
+### 2. `api/src/worker/` package instead of `api/src/worker.py`
 
-**Spec:** Worker just needs to boot; real jobs come in Slice 5.  
-**Actual:** `functions = [noop]` instead of `functions = []`  
-**Why:** ARQ raises `RuntimeError: at least one function or cron_job must be registered` with an empty list. Replace `noop` with real job functions in Slice 5 — do not keep it.
+**Spec:** `api/src/worker.py` — ARQ `WorkerSettings` entrypoint (flat file).  
+**Actual:** `api/src/worker/__init__.py` — `WorkerSettings` lives in the package `__init__`.  
+**Why:** Slice 5 adds `api/src/worker/jobs.py` and `api/src/worker/parsers/` sub-package. Python resolves `src.worker` to the directory package when both `src/worker.py` and `src/worker/` exist, so the flat file is shadowed. Moving `WorkerSettings` into `src/worker/__init__.py` ensures `arq src.worker.WorkerSettings` resolves correctly. The original `src/worker.py` is deleted.
 
 ### 3. `api/pyproject.toml` — build backend is hatchling (Slice 1 supersedes Slice 0)
 
@@ -244,10 +268,10 @@ Auth is in demo mode (`AUTH_MODE=demo`). Any Bearer token value works. `Authoriz
 
 ## Next Step
 
-Implement **Slice 5 — Parsing Worker**.
+Implement **Slice 6 — Chunk + Embed + Persist**.
 
 Prompt:
 ```
-Read specs/slices/00-prompt-prefix.md then implement: Slice 5 — Parsing Worker
-(specs/slices/slice-05-parsing-worker.md)
+Read specs/slices/00-prompt-prefix.md then implement: Slice 6 — Chunk + Embed + Persist
+(specs/slices/slice-06-chunk-embed-persist.md)
 ```
