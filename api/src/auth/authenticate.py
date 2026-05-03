@@ -1,3 +1,4 @@
+import uuid as _uuid
 from fastapi import Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,7 +12,7 @@ security = HTTPBearer(auto_error=False)
 
 class AuthenticatedTenant:
     def __init__(self, tenant_id: str, user_id: str):
-        self.tenant_id = tenant_id
+        self.tenant_id = _uuid.UUID(tenant_id)
         self.user_id = user_id
 
 

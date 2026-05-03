@@ -14,6 +14,13 @@ curl localhost:8000/health   # → {"status":"ok","db":"connected","redis":"conn
 curl localhost:8000/api/v1/chatbots -H "Authorization: Bearer alice"
 # → 200 with a starter chatbot auto-created for tenant "alice"
 
+# Chatbot CRUD (Slice 3):
+curl -X POST localhost:8000/api/v1/chatbots \
+  -H "Authorization: Bearer alice" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"My Bot","system_prompt_override":"Be concise."}'
+# → 201 {"chatbot": {"id": "...", "name": "My Bot", ...}}
+
 # Gradio UI: http://localhost:7860
 # MinIO console: http://localhost:9001  (minioadmin / minioadmin)
 ```

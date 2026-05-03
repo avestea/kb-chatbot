@@ -21,7 +21,7 @@ A SaaS knowledge base chatbot builder in Python. Operators upload documents (PDF
 | 0 | Docker / Dev Environment | **Done** | All containers healthy. See deviations below. |
 | 1 | FastAPI Scaffold + DB Schema | **Done** | `/health` returns `{"status":"ok","db":"connected","redis":"connected"}`; all 6 tables + HNSW index created via Alembic. |
 | 2 | Auth & Multi-Tenancy | **Done** | Demo mode fully working; all 8 AC tests pass. See deviations below. |
-| 3 | Chatbot CRUD | Not started | |
+| 3 | Chatbot CRUD | **Done** | Full CRUD; 18 tests pass. See deviations below. |
 | 4 | Document Upload | Not started | |
 | 5 | Parsing Worker | Not started | |
 | 6 | Chunk + Embed + Persist | Not started | |
@@ -50,6 +50,25 @@ infra/minio/init.sh         creates kbchat-dev bucket on first boot
 .env.example                same keys, placeholder values
 Makefile                    up / down / logs / psql / redis-cli / sh-api / migrate / rebuild
 ```
+
+### Chatbot CRUD (Slice 3)
+
+```
+api/src/schemas/__init__.py     empty package marker
+api/src/schemas/chatbots.py     CreateChatbotRequest, UpdateChatbotRequest, ChatbotResponse, ChatbotListResponse
+api/src/routes/chatbots.py      Full CRUD: POST/GET/GET-by-id/PUT/DELETE under /api/v1/chatbots
+api/tests/test_chatbots.py      18 tests covering all ACs
+```
+
+Verified ACs:
+- `POST /api/v1/chatbots` → 201 `{"chatbot": {...}}`
+- `GET /api/v1/chatbots` → `{"items":[...],"total":N,"has_more":bool}`
+- `GET /api/v1/chatbots?limit=200` → 422
+- Tenant A cannot GET/PUT/DELETE Tenant B's chatbot → 404
+- DELETE soft-deletes chatbot; chatbot disappears from GET list; GET-by-id returns 404
+- `PUT` with only `{"name": "New Name"}` updates only name; `system_prompt_override` unchanged
+
+---
 
 ### Auth (Slice 2)
 
@@ -203,13 +222,10 @@ Auth is in demo mode (`AUTH_MODE=demo`). Any Bearer token value works. `Authoriz
 
 ## Next Step
 
-Implement **Slice 3 — Chatbot CRUD**.
+Implement **Slice 4 — Document Upload**.
 
 Prompt:
 ```
-Read specs/slices/00-prompt-prefix.md then implement: Slice 3 — Chatbot CRUD
-(specs/slices/slice-03-chatbot-crud.md)
-
-Note: api/src/routes/chatbots.py already exists with a minimal GET /chatbots stub
-from Slice 2. Slice 3 should replace/expand that file with full CRUD.
+Read specs/slices/00-prompt-prefix.md then implement: Slice 4 — Document Upload
+(specs/slices/slice-04-document-upload.md)
 ```
