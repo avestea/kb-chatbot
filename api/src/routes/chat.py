@@ -76,6 +76,7 @@ async def _generate(chatbot_id: str, body: ChatRequest, request: Request):
                 "document_name": c.document_name,
                 "snippet": c.content[:300],
                 "similarity": round(c.similarity, 3),
+                "match_type": "keyword" if c.similarity == 0.0 else "semantic",
             }
             for i, c in enumerate(chunks)
         ]

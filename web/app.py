@@ -152,7 +152,7 @@ def chat_handler(message, history, token, chatbot_id, session_id_state):
         )
 
     rows = [
-        [s["index"], s["document_name"], s["similarity"], s["snippet"]]
+        [s["index"], s["document_name"], s.get("match_type", "semantic"), s["similarity"], s["snippet"]]
         for s in sources_captured
     ]
     yield (
@@ -205,7 +205,7 @@ with gr.Blocks(title="KB Chatbot") as demo:
             )
             send_btn = gr.Button("Send", variant="primary", scale=1)
         sources_display = gr.Dataframe(
-            headers=["#", "Document", "Similarity", "Snippet"],
+            headers=["#", "Document", "Match", "Similarity", "Snippet"],
             label="Sources used",
             visible=False,
         )

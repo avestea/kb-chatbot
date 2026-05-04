@@ -30,7 +30,7 @@ A SaaS knowledge base chatbot builder in Python. Operators upload documents (PDF
 | 9 | Gradio UI | **Done** | Gradio 6 (resolved from >=5.0.0). 3-tab UI: Chatbots/Documents/Chat. All ACs verified. See deviations below. |
 | 10 | Explainability | **Done** | 107/107 tests pass (7 new). sources SSE event + source_chunks column. See deviations below. |
 | 11 | Evaluation Dashboard | **Done** | 122/122 tests pass (15 new). Analytics routes + Gradio Evaluation tab. See deviations below. |
-| 12 | Hybrid Search | Not started | |
+| 12 | Hybrid Search | **Done** | 128/128 tests pass (6 new). BM25 + vector + RRF merge; keyword-only hits surface with similarity=0.0. See deviations below. |
 | 13 | Query Rewriting | Not started | |
 | 14 | Feedback | Not started | |
 
@@ -39,6 +39,42 @@ MVP = Slices 0–9.
 ---
 
 ## What Exists Right Now
+
+### Hybrid Search (Slice 12)
+
+```
+api/alembic/versions/0003_add_chunks_tsvector.py
+                                ALTER TABLE chunks ADD COLUMN content_tsv tsvector
+                                GENERATED ALWAYS AS (to_tsvector('english', content)) STORED;
+                                CREATE INDEX chunks_content_tsv_idx ON chunks USING gin(content_tsv)
+api/src/db/models.py            Added: content_tsv: Mapped[Any] = mapped_column(TSVECTOR, Computed(...))
+api/src/rag/retrieve.py         Replaced pure vector search with hybrid BM25+vector+RRF:
+                                  vector_sql: pgvector cosine search (top_k*3 candidates) + ROW_NUMBER rank
+                                  fts_sql: ts_rank_cd + plainto_tsquery FTS (top_k*3 candidates) + ROW_NUMBER rank
+                                  RRF_K=60 merge; fts_ids set tracks keyword hits
+                                  Keyword hit rescue: chunk in FTS with vec_sim < threshold → sim=0.0 (not filtered)
+api/src/routes/chat.py          sources_payload extended: "match_type": "keyword"|"semantic"
+web/app.py                      sources_display headers: ["#","Document","Match","Similarity","Snippet"]
+                                chat_handler rows: includes match_type column
+api/tests/test_retrieval.py     4 new tests: keyword_only_hit, keyword_hit_with_regular_word,
+                                  hybrid_chunk_scores_higher_when_both_match, keyword_hit_respects_top_k
+api/tests/test_chat.py          2 new tests: sources_match_type_semantic, sources_match_type_keyword
+```
+
+Verified ACs:
+- Chunk with "SKU-8821 warranty terms" returned for query "SKU-8821" (FTS keyword match) even with anti-parallel query vector
+- Semantic queries (vector sim ≥ 0.75) still work as before
+- `retrieve_context` returns at most `top_k` results (keyword + semantic combined)
+- `content_tsv` populated automatically on INSERT (GENERATED ALWAYS AS STORED)
+- `match_type: "keyword"` in sources SSE payload for similarity=0.0 chunks
+- `match_type: "semantic"` for vector-matched chunks
+- No changes to chat endpoint behavior or analytics routes
+- All 128 tests pass (no regressions)
+
+**Deviation from spec — keyword-hit filter logic:**
+The spec's filter `if row["similarity"] is not None and similarity < min_similarity: continue` only passes FTS-only rows (similarity=None). In practice, any chunk inserted into a small test DB always appears in vector results (it's the "best" candidate even with terrible similarity). Fixed by tracking `fts_ids` and rescuing chunks that appear in BOTH vector AND FTS with sim < threshold: they pass with similarity=0.0 (keyword hit). This matches the spec's intent and is required for the keyword-only AC tests.
+
+---
 
 ### Evaluation Dashboard (Slice 11) + UI fixes
 
@@ -448,10 +484,10 @@ Auth is in demo mode (`AUTH_MODE=demo`). Any Bearer token value works. `Authoriz
 
 ## Next Step
 
-Implement **Slice 12 — Hybrid Search**.
+Implement **Slice 13 — Query Rewriting**.
 
 Prompt:
 ```
-Read specs/slices/00-prompt-prefix.md then implement: Slice 12 — Hybrid Search
-(specs/slices/slice-12-hybrid-search.md)
+Read specs/slices/00-prompt-prefix.md then implement: Slice 13 — Query Rewriting
+(specs/slices/slice-13-query-rewriting.md)
 ```

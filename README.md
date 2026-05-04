@@ -46,7 +46,7 @@ curl -N -X POST "localhost:8000/api/v1/chat/$BOT_ID/message" \
   -H "Content-Type: application/json" \
   -d '{"message":"What is the refund policy?","session_id":"my-session-1"}'
 # → event: meta    data: {"conversation_id":"...","source_count":2}
-# → event: sources data: {"sources":[{"index":1,"chunk_id":"...","document_name":"policy.pdf","similarity":0.92,"snippet":"Returns accepted..."}]}
+# → event: sources data: {"sources":[{"index":1,"chunk_id":"...","document_name":"policy.pdf","similarity":0.92,"match_type":"semantic","snippet":"Returns accepted..."}]}
 # → event: token   data: {"text":"Returns are"}
 # → event: token   data: {"text":" accepted within 30 days."}
 # → event: done    data: {"message_id":"..."}
@@ -153,7 +153,7 @@ api/                          FastAPI app + ARQ worker
   src/worker/parsers/         PDF / DOCX / HTML / TXT parsers
   src/worker/chunker.py       chunk_text() — token-aware sentence chunker (tiktoken)
   src/lib/embedder.py         embed_chunks() — OpenAI text-embedding-3-small, batched + retried
-  src/rag/retrieve.py         retrieve_context() — pgvector HNSW cosine search + similarity filter
+  src/rag/retrieve.py         retrieve_context() — hybrid BM25+vector search merged with RRF (Slice 12)
   src/rag/prompt.py           build_system_prompt() — injects retrieved chunks into SYSTEM_TEMPLATE
   src/lib/llm.py              stream_completion() — Anthropic streaming wrapper (TokenEvent/UsageEvent)
   src/routes/chat.py          POST /api/v1/chat/{chatbot_id}/message — public SSE endpoint
@@ -170,6 +170,21 @@ specs/
   progress.md                 Implementation status + LLM handoff notes
   slices/                     Slice-by-slice implementation prompts
 ```
+
+## Retrieval Strategy (Slice 12)
+
+Hybrid BM25 + vector search merged with Reciprocal Rank Fusion (RRF):
+
+| Query type | Pure vector | Hybrid |
+|---|---|---|
+| "refund policy" | ✓ good | ✓ good |
+| "Section 4.2" | ✗ poor | ✓ good |
+| "SKU-8821 warranty" | ✗ poor | ✓ good |
+
+- Vector search uses pgvector HNSW cosine distance (top `k×3` candidates)
+- Full-text search uses PostgreSQL `plainto_tsquery` + `ts_rank_cd` (GIN index)
+- RRF_K=60 merge, then top-k selected
+- Keyword-only hits return with `similarity=0.0` and `match_type="keyword"` in the sources panel
 
 ## Implementation Status
 

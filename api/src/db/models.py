@@ -1,12 +1,12 @@
 import uuid
 from datetime import datetime, timezone
-from typing import Optional, List
+from typing import Any, Optional, List
 from sqlalchemy import (
     String, Text, Integer, Boolean, DateTime, Index,
-    UniqueConstraint, ForeignKey, func
+    UniqueConstraint, ForeignKey, func, Computed
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
-from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy.dialects.postgresql import UUID, JSONB, TSVECTOR
 from pgvector.sqlalchemy import Vector
 
 
@@ -85,6 +85,10 @@ class Chunk(Base):
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
     embedding: Mapped[List[float]] = mapped_column(Vector(1536), nullable=False)
     embedding_model: Mapped[str] = mapped_column(Text, nullable=False)
+    content_tsv: Mapped[Any] = mapped_column(
+        TSVECTOR,
+        Computed("to_tsvector('english', content)", persisted=True),
+    )
 
     document: Mapped["Document"] = relationship(back_populates="chunks")
 

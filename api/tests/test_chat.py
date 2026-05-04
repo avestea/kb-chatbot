@@ -539,3 +539,51 @@ async def test_similarity_scores_in_valid_range(client, chatbot_id):
     src_event = next(e for e in events if e["event"] == "sources")
     for s in src_event["data"]["sources"]:
         assert 0.0 <= s["similarity"] <= 1.0
+
+
+# ---------------------------------------------------------------------------
+# Slice 12 — Hybrid search: match_type field in sources payload
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_sources_match_type_semantic_for_vector_hit(client, chatbot_id):
+    """Chunk with similarity > 0 produces match_type='semantic' in sources payload."""
+    fake_llm = FakeStreamCompletion(tokens=["OK"])
+
+    with patch("src.routes.chat.stream_completion", new=fake_llm), \
+         patch("src.routes.chat.retrieve_context", new=AsyncMock(return_value=FAKE_CHUNKS)):
+        resp = await client.post(
+            f"/api/v1/chat/{chatbot_id}/message",
+            json={"message": "refund?", "session_id": "sess-match-semantic"},
+        )
+
+    events = parse_sse(resp.text)
+    src_event = next(e for e in events if e["event"] == "sources")
+    sources = src_event["data"]["sources"]
+    assert sources[0]["match_type"] == "semantic"
+
+
+@pytest.mark.asyncio
+async def test_sources_match_type_keyword_for_zero_similarity(client, chatbot_id):
+    """Chunk with similarity == 0.0 (keyword-only hit) produces match_type='keyword'."""
+    keyword_chunk = RetrievedChunk(
+        id=str(uuid.uuid4()),
+        document_id=str(uuid.uuid4()),
+        document_name="sku_doc.txt",
+        content="SKU-8821 warranty terms and conditions apply",
+        similarity=0.0,
+    )
+    fake_llm = FakeStreamCompletion(tokens=["Found it"])
+
+    with patch("src.routes.chat.stream_completion", new=fake_llm), \
+         patch("src.routes.chat.retrieve_context", new=AsyncMock(return_value=[keyword_chunk])):
+        resp = await client.post(
+            f"/api/v1/chat/{chatbot_id}/message",
+            json={"message": "SKU-8821", "session_id": "sess-match-keyword"},
+        )
+
+    events = parse_sse(resp.text)
+    src_event = next(e for e in events if e["event"] == "sources")
+    sources = src_event["data"]["sources"]
+    assert sources[0]["match_type"] == "keyword"
+    assert sources[0]["similarity"] == 0.0
