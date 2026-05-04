@@ -49,6 +49,35 @@ class APIClient:
             r = await c.delete(f"/api/v1/chatbots/{chatbot_id}/documents/{document_id}")
             r.raise_for_status()
 
+    async def get_analytics_summary(self, chatbot_id: str | None = None) -> dict:
+        params = {}
+        if chatbot_id:
+            params["chatbot_id"] = chatbot_id
+        async with self._client() as c:
+            r = await c.get("/api/v1/analytics/summary", params=params)
+            r.raise_for_status()
+            return r.json()
+
+    async def list_conversations(
+        self,
+        chatbot_id: str | None = None,
+        no_answer_only: bool = False,
+        limit: int = 25,
+    ) -> list[dict]:
+        params = {"limit": limit, "no_answer_only": str(no_answer_only).lower()}
+        if chatbot_id:
+            params["chatbot_id"] = chatbot_id
+        async with self._client() as c:
+            r = await c.get("/api/v1/analytics/conversations", params=params)
+            r.raise_for_status()
+            return r.json()["items"]
+
+    async def get_conversation_messages(self, conversation_id: str) -> list[dict]:
+        async with self._client() as c:
+            r = await c.get(f"/api/v1/analytics/conversations/{conversation_id}/messages")
+            r.raise_for_status()
+            return r.json()["messages"]
+
     def chat_stream(self, chatbot_id: str, message: str, session_id: str, on_sources=None) -> Iterator[str]:
         """Synchronous generator — Gradio streaming requires sync generators.
 

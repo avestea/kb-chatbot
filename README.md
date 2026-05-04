@@ -51,7 +51,7 @@ curl -N -X POST "localhost:8000/api/v1/chat/$BOT_ID/message" \
 # → event: token   data: {"text":" accepted within 30 days."}
 # → event: done    data: {"message_id":"..."}
 
-# Gradio UI (Slice 9+10): http://localhost:7860
+# Gradio UI (Slice 9+10+11): http://localhost:7860
 #   1. Enter "alice" in the API Token field
 #   2. Chatbots tab → Refresh → see your chatbots; Create New Chatbot
 #   3. Documents tab → Select Chatbot → Upload File → status "pending"
@@ -59,6 +59,19 @@ curl -N -X POST "localhost:8000/api/v1/chat/$BOT_ID/message" \
 #   4. Chat tab → Select Chatbot → type question → streaming answer appears
 #      After each answer, a "Sources used" table shows document name,
 #      similarity score, and snippet for each retrieved chunk.
+#   5. Evaluation tab → Refresh → see quality stats (conversations, messages,
+#      no-answer rate, avg similarity). Toggle "Show failures only" to filter
+#      to conversations where the bot had no relevant context. Paste a
+#      conversation ID and click Inspect to see the full message thread.
+
+# Analytics API (Slice 11):
+curl "localhost:8000/api/v1/analytics/summary" \
+  -H "Authorization: Bearer alice"
+# → {"total_conversations":5,"total_messages":8,"no_answer_count":2,"no_answer_rate":0.25,"avg_top_similarity":0.89}
+
+curl "localhost:8000/api/v1/analytics/conversations?no_answer_only=true" \
+  -H "Authorization: Bearer alice"
+# → {"items":[{"id":"...","chatbot_id":"...","first_question":"What is...","has_failure":true,"created_at":"..."}],"total":2,"has_more":false}
 
 # MinIO console: http://localhost:9001  (minioadmin / minioadmin)
 ```
@@ -145,8 +158,8 @@ api/                          FastAPI app + ARQ worker
   src/lib/llm.py              stream_completion() — Anthropic streaming wrapper (TokenEvent/UsageEvent)
   src/routes/chat.py          POST /api/v1/chat/{chatbot_id}/message — public SSE endpoint
   pyproject.toml              Dependencies
-web/                          Gradio UI (Slice 9)
-  app.py                      3-tab Gradio app: Chatbots / Documents / Chat
+web/                          Gradio UI (Slice 9+11)
+  app.py                      4-tab Gradio app: Chatbots / Documents / Chat / Evaluation
   api_client.py               Typed httpx wrapper around the FastAPI REST API
   requirements.txt            gradio>=5.0.0 (resolves to 6.x), httpx, python-dotenv
 infra/

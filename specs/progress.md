@@ -29,7 +29,7 @@ A SaaS knowledge base chatbot builder in Python. Operators upload documents (PDF
 | 8 | Chat Endpoint | **Done** | 100/100 tests pass (16 new). SSE streaming via Anthropic Claude; conversation + message persistence. See deviations below. |
 | 9 | Gradio UI | **Done** | Gradio 6 (resolved from >=5.0.0). 3-tab UI: Chatbots/Documents/Chat. All ACs verified. See deviations below. |
 | 10 | Explainability | **Done** | 107/107 tests pass (7 new). sources SSE event + source_chunks column. See deviations below. |
-| 11 | Evaluation Dashboard | Not started | |
+| 11 | Evaluation Dashboard | **Done** | 122/122 tests pass (15 new). Analytics routes + Gradio Evaluation tab. See deviations below. |
 | 12 | Hybrid Search | Not started | |
 | 13 | Query Rewriting | Not started | |
 | 14 | Feedback | Not started | |
@@ -39,6 +39,33 @@ MVP = Slices 0–9.
 ---
 
 ## What Exists Right Now
+
+### Evaluation Dashboard (Slice 11)
+
+```
+api/src/routes/analytics.py     GET /api/v1/analytics/summary — aggregate stats (convs, messages, no_answer_rate, avg_top_similarity)
+                                GET /api/v1/analytics/conversations — paginated conversation list with first_question and has_failure;
+                                  supports ?no_answer_only=true and ?chatbot_id= filters
+                                GET /api/v1/analytics/conversations/{id}/messages — full message thread with source_chunks per turn
+api/src/main.py                 Registered analytics_router under /api/v1
+web/api_client.py               get_analytics_summary(), list_conversations(), get_conversation_messages()
+web/app.py                      Evaluation tab: summary stats (4 Number cards), conversations Dataframe,
+                                  "Show failures only" checkbox, Conversation detail inspector (gr.JSON)
+                                refresh_chatbots() updated to also populate eval_chatbot_select dropdown
+api/tests/test_analytics.py     15 tests: summary counts, no_answer_rate, avg_similarity, chatbot filter,
+                                  list_conversations, no_answer_only filter, pagination,
+                                  conversation messages, cross-tenant isolation (404), auth guards
+```
+
+Verified ACs:
+- `GET /api/v1/analytics/summary` returns correct counts after seeding test conversations
+- `no_answer_rate` reflects actual `no_answer=True` flags in the messages table
+- `GET /api/v1/analytics/conversations?no_answer_only=true` returns only conversations with at least one failed answer
+- `GET /api/v1/analytics/conversations/{id}/messages` returns full thread with `source_chunks` per assistant turn
+- Cross-tenant: tenant B cannot inspect tenant A's conversations → 404
+- All 122 tests pass (no regressions)
+
+---
 
 ### Explainability (Slice 10)
 
@@ -358,6 +385,14 @@ RUN mkdir -p src && pip install --no-cache-dir -e ".[dev]"
 **Actual:** `api/tests/factories/__init__.py`  
 **Why:** implemented as a package directory. Imports work identically: `from tests.factories import TenantFactory`.
 
+### 11. `api/src/routes/analytics.py` — jsonpath literal uses `literal_column` with explicit cast (Slice 11)
+
+**Spec:** `cast("$[0].similarity", type_=None)` as the jsonpath argument to `jsonb_path_query_first`.  
+**Actual:** `literal_column("'$[0].similarity'::jsonpath")`.  
+**Why:** `jsonb_path_query_first` in PostgreSQL requires a `jsonpath` argument, not `varchar`. asyncpg raises `UndefinedFunctionError: function jsonb_path_query_first(jsonb, character varying) does not exist`. Using `literal_column()` with an explicit `::jsonpath` cast passes the value as a SQL text fragment with the correct type.
+
+Also: spec's `func.sum(func.cast(Message.no_answer, Float))` replaced with `func.count(Message.id).filter(Message.no_answer == True)` — PostgreSQL cannot `CAST(boolean AS float)` directly, and `func.cast` (as opposed to SQLAlchemy's `cast()`) generates `cast(...)` as a function call rather than a CAST expression. The `count().filter()` approach is cleaner and unambiguous.
+
 ### 10. `web/app.py` — Gradio 6 compatibility fixes (Slice 9)
 
 **Spec:** Written for Gradio 5 API.  
@@ -400,10 +435,10 @@ Auth is in demo mode (`AUTH_MODE=demo`). Any Bearer token value works. `Authoriz
 
 ## Next Step
 
-Implement **Slice 11 — Evaluation Dashboard**.
+Implement **Slice 12 — Hybrid Search**.
 
 Prompt:
 ```
-Read specs/slices/00-prompt-prefix.md then implement: Slice 11 — Evaluation Dashboard
-(specs/slices/slice-11-evaluation-dashboard.md)
+Read specs/slices/00-prompt-prefix.md then implement: Slice 12 — Hybrid Search
+(specs/slices/slice-12-hybrid-search.md)
 ```
