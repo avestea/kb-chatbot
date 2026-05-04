@@ -101,6 +101,7 @@ def refresh_eval(token, chatbot_name, chatbot_choices, failures_only):
         ]
         for c in convs
     ]
+    full_ids = [c["id"] for c in convs]
 
     no_answer_pct = round(summary.get("no_answer_rate", 0) * 100, 1)
     avg_sim = summary.get("avg_top_similarity")
@@ -114,6 +115,7 @@ def refresh_eval(token, chatbot_name, chatbot_choices, failures_only):
         avg_sim if avg_sim is not None else 0,
         satisfaction_pct,
         gr.update(value=rows),
+        full_ids,
     )
 
 
@@ -272,11 +274,12 @@ with gr.Blocks(title="KB Chatbot") as demo:
             headers=["ID", "Chatbot", "First question", "Has failure", "Started"],
             interactive=False,
         )
-        selected_conv_id = gr.State("")
+        full_conv_ids_state = gr.State([])
+        copy_conv_id_btn = gr.Button("Copy selected ID", variant="secondary")
 
         gr.Markdown("### Conversation detail")
         gr.Markdown("*Click a row above then press Inspect.*")
-        conv_id_input = gr.Textbox(label="Conversation ID", placeholder="paste or select above")
+        conv_id_input = gr.Textbox(label="Conversation ID", placeholder="click a row or paste")
         inspect_btn = gr.Button("Inspect", variant="secondary")
         message_detail = gr.JSON(label="Messages + sources")
 
@@ -347,8 +350,25 @@ with gr.Blocks(title="KB Chatbot") as demo:
     refresh_eval_btn.click(
         refresh_eval,
         inputs=[token_input, eval_chatbot_select, chatbot_choices_state, show_failures_only],
-        outputs=[stat_total_convs, stat_total_msgs, stat_no_answer, stat_avg_sim, stat_satisfaction, conv_table],
+        outputs=[stat_total_convs, stat_total_msgs, stat_no_answer, stat_avg_sim, stat_satisfaction, conv_table, full_conv_ids_state],
     )
+
+    def on_conv_row_select(evt: gr.SelectData, full_ids):
+        row = evt.index[0]
+        return full_ids[row] if full_ids and row < len(full_ids) else ""
+
+    conv_table.select(
+        on_conv_row_select,
+        inputs=[full_conv_ids_state],
+        outputs=[conv_id_input],
+    )
+
+    copy_conv_id_btn.click(
+        None,
+        inputs=[conv_id_input],
+        js="(val) => { if (val) navigator.clipboard.writeText(val); }",
+    )
+
     inspect_btn.click(
         inspect_conversation,
         inputs=[token_input, conv_id_input],
