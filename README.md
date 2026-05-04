@@ -37,6 +37,10 @@ curl "localhost:8000/api/v1/chatbots/$BOT_ID/documents" \
 # Poll the document list to check status. Once "ready", the document
 # is searchable. On failure, status = "error" with error_reason set.
 
+# Retrieve relevant chunks (used internally by the chat endpoint):
+# retrieve_context() in api/src/rag/retrieve.py — vector search via pgvector HNSW index.
+# Returns top-K chunks by cosine similarity; Python-side min_similarity filter (default 0.75).
+
 # Gradio UI: http://localhost:7860
 # MinIO console: http://localhost:9001  (minioadmin / minioadmin)
 ```
@@ -118,6 +122,7 @@ api/                          FastAPI app + ARQ worker
   src/worker/parsers/         PDF / DOCX / HTML / TXT parsers
   src/worker/chunker.py       chunk_text() — token-aware sentence chunker (tiktoken)
   src/lib/embedder.py         embed_chunks() — OpenAI text-embedding-3-small, batched + retried
+  src/rag/retrieve.py         retrieve_context() — pgvector HNSW cosine search + similarity filter
   pyproject.toml              Dependencies
 web/                          Gradio UI
   app.py                      UI entrypoint

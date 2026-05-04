@@ -25,7 +25,7 @@ A SaaS knowledge base chatbot builder in Python. Operators upload documents (PDF
 | 4 | Document Upload | **Done** | 18/18 tests pass. S3 + ARQ mocked in tests. See deviations below. |
 | 5 | Parsing Worker | **Done** | 17/17 tests pass. Worker boots and registers `ingest_document`. See deviations below. |
 | 6 | Chunk + Embed + Persist | **Done** | 78/78 tests pass (34 new). Chunks table populated; embeddings via OpenAI. See deviations below. |
-| 7 | Retrieval Function | Not started | |
+| 7 | Retrieval Function | **Done** | 84/84 tests pass (6 new). pgvector HNSW cosine search. See deviations below. |
 | 8 | Chat Endpoint | Not started | |
 | 9 | Gradio UI | Not started | |
 | 10 | Explainability | Not started | |
@@ -39,6 +39,26 @@ MVP = Slices 0–9.
 ---
 
 ## What Exists Right Now
+
+### Retrieval Function (Slice 7)
+
+```
+api/src/rag/__init__.py     empty package marker
+api/src/rag/retrieve.py     retrieve_context(): embed query → pgvector HNSW cosine search → Python similarity filter
+api/tests/test_retrieval.py 6 tests: relevant hit, off-topic empty, chatbot isolation, soft-delete exclusion,
+                            dataclass field check, top_k respected
+```
+
+Verified ACs:
+- Chunk stored with `[0.1]*1536` embedding; query mocked to `[0.1]*1536` → cosine similarity 1.0 → returned (> 0.75 ✓)
+- Query mocked to `[-0.1]*1536` (anti-parallel) → cosine similarity -1.0 → filtered out → returns `[]`
+- `chatbot_id` WHERE clause prevents cross-chatbot leakage
+- `d.deleted_at IS NULL` JOIN filter excludes soft-deleted documents
+- `top_k` limits candidate rows before Python filter
+- `embedding_model` filter prevents cross-model garbage scores
+- All 84 tests pass (no regressions)
+
+---
 
 ### Chunk + Embed + Persist (Slice 6)
 
@@ -291,10 +311,10 @@ Auth is in demo mode (`AUTH_MODE=demo`). Any Bearer token value works. `Authoriz
 
 ## Next Step
 
-Implement **Slice 7 — Retrieval Function**.
+Implement **Slice 8 — Chat Endpoint**.
 
 Prompt:
 ```
-Read specs/slices/00-prompt-prefix.md then implement: Slice 7 — Retrieval Function
-(specs/slices/slice-07-retrieval.md)
+Read specs/slices/00-prompt-prefix.md then implement: Slice 8 — Chat Endpoint
+(specs/slices/slice-08-chat-endpoint.md)
 ```
