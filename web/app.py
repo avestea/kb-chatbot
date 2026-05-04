@@ -1,28 +1,36 @@
 import gradio as gr
 import asyncio
+import threading
 import os
 import uuid
 from api_client import APIClient
 
 # ─── Helpers ────────────────────────────────────────────────────────────────
 
-def get_client(token: str) -> APIClient:
-    if not token.strip():
-        raise gr.Error("Enter your API token first.")
-    return APIClient(token.strip())
+# Single background event loop shared across all Gradio handlers.
+# Avoids spawning a new thread + loop for every async call.
+_bg_loop = asyncio.new_event_loop()
+threading.Thread(target=_bg_loop.run_forever, daemon=True).start()
 
 def run(coro):
-    """Run an async coroutine from synchronous Gradio handler."""
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                future = pool.submit(asyncio.run, coro)
-                return future.result()
-    except RuntimeError:
-        pass
-    return asyncio.run(coro)
+    """Submit a coroutine to the background loop and block until done."""
+    return asyncio.run_coroutine_threadsafe(coro, _bg_loop).result()
+
+def run_parallel(*coros):
+    """Run multiple coroutines concurrently and return all results."""
+    async def _gather():
+        return await asyncio.gather(*coros)
+    return asyncio.run_coroutine_threadsafe(_gather(), _bg_loop).result()
+
+_client_cache: dict[str, APIClient] = {}
+
+def get_client(token: str) -> APIClient:
+    token = token.strip()
+    if not token:
+        raise gr.Error("Enter your API token first.")
+    if token not in _client_cache:
+        _client_cache[token] = APIClient(token)
+    return _client_cache[token]
 
 # ─── Tab: Chatbots ───────────────────────────────────────────────────────────
 
@@ -47,12 +55,18 @@ def create_chatbot_handler(token, name, system_prompt):
 
 # ─── Tab: Documents ──────────────────────────────────────────────────────────
 
-def refresh_documents(token, chatbot_id):
+def _doc_rows(token, chatbot_id):
     if not chatbot_id:
-        return gr.update(value=[])
+        return []
     docs = run(get_client(token).list_documents(chatbot_id))
-    rows = [[d["id"], d["filename"], d["status"], d.get("error_reason", "")] for d in docs]
-    return gr.update(value=rows)
+    return [[d["id"], d["filename"], d["status"], d.get("error_reason", "")] for d in docs]
+
+def refresh_documents(token, chatbot_id):
+    return gr.update(value=_doc_rows(token, chatbot_id))
+
+def on_chatbot_select_docs(token, name, choices):
+    chatbot_id = choices.get(name, "") if name else ""
+    return chatbot_id
 
 def upload_handler(token, chatbot_id, file):
     if not chatbot_id:
@@ -72,8 +86,10 @@ def refresh_eval(token, chatbot_name, chatbot_choices, failures_only):
     client = get_client(token)
     chatbot_id = chatbot_choices.get(chatbot_name) if chatbot_name and chatbot_name != "All" else None
 
-    summary = run(client.get_analytics_summary(chatbot_id))
-    convs = run(client.list_conversations(chatbot_id, no_answer_only=failures_only))
+    summary, convs = run_parallel(
+        client.get_analytics_summary(chatbot_id),
+        client.list_conversations(chatbot_id, no_answer_only=failures_only),
+    )
 
     rows = [
         [
@@ -208,7 +224,7 @@ with gr.Blocks(title="KB Chatbot") as demo:
             stat_avg_sim = gr.Number(label="Avg top similarity", interactive=False)
 
         gr.Markdown("### Conversations")
-        show_failures_only = gr.Checkbox(label="Show failures only (no-answer responses)", value=False)
+        show_failures_only = gr.Checkbox(label="Show failures only (no-answer responses) — then press Refresh", value=False)
         conv_table = gr.Dataframe(
             headers=["ID", "Chatbot", "First question", "Has failure", "Started"],
             interactive=False,
@@ -239,14 +255,16 @@ with gr.Blocks(title="KB Chatbot") as demo:
     )
 
     chatbot_select_docs.change(
-        lambda token, name, choices: choices.get(name, ""),
+        on_chatbot_select_docs,
         inputs=[token_input, chatbot_select_docs, chatbot_choices_state],
         outputs=[chatbot_id_state],
+        queue=False,
     )
     chatbot_select_chat.change(
         lambda token, name, choices: choices.get(name, ""),
         inputs=[token_input, chatbot_select_chat, chatbot_choices_state],
         outputs=[chatbot_id_state],
+        queue=False,
     )
 
     refresh_docs_btn.click(
@@ -277,11 +295,6 @@ with gr.Blocks(title="KB Chatbot") as demo:
         inputs=[token_input, eval_chatbot_select, chatbot_choices_state, show_failures_only],
         outputs=[stat_total_convs, stat_total_msgs, stat_no_answer, stat_avg_sim, conv_table],
     )
-    show_failures_only.change(
-        refresh_eval,
-        inputs=[token_input, eval_chatbot_select, chatbot_choices_state, show_failures_only],
-        outputs=[stat_total_convs, stat_total_msgs, stat_no_answer, stat_avg_sim, conv_table],
-    )
     inspect_btn.click(
         inspect_conversation,
         inputs=[token_input, conv_id_input],
@@ -289,6 +302,7 @@ with gr.Blocks(title="KB Chatbot") as demo:
     )
 
 if __name__ == "__main__":
+    demo.queue(default_concurrency_limit=10)
     demo.launch(
         server_name="0.0.0.0",
         server_port=7860,

@@ -8,55 +8,50 @@ API_BASE = os.getenv("API_BASE_URL", "http://api:8000")
 class APIClient:
     def __init__(self, token: str):
         self.token = token
-        self.headers = {"Authorization": f"Bearer {token}"}
-
-    def _client(self) -> httpx.AsyncClient:
-        return httpx.AsyncClient(base_url=API_BASE, headers=self.headers, timeout=30)
+        self._http = httpx.AsyncClient(
+            base_url=API_BASE,
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=30,
+        )
 
     async def list_chatbots(self) -> list[dict]:
-        async with self._client() as c:
-            r = await c.get("/api/v1/chatbots")
-            r.raise_for_status()
-            return r.json()["items"]
+        r = await self._http.get("/api/v1/chatbots")
+        r.raise_for_status()
+        return r.json()["items"]
 
     async def create_chatbot(self, name: str, system_prompt: str | None = None) -> dict:
-        async with self._client() as c:
-            r = await c.post("/api/v1/chatbots", json={
-                "name": name,
-                "system_prompt_override": system_prompt or None,
-            })
-            r.raise_for_status()
-            return r.json()["chatbot"]
+        r = await self._http.post("/api/v1/chatbots", json={
+            "name": name,
+            "system_prompt_override": system_prompt or None,
+        })
+        r.raise_for_status()
+        return r.json()["chatbot"]
 
     async def list_documents(self, chatbot_id: str) -> list[dict]:
-        async with self._client() as c:
-            r = await c.get(f"/api/v1/chatbots/{chatbot_id}/documents")
-            r.raise_for_status()
-            return r.json()["items"]
+        r = await self._http.get(f"/api/v1/chatbots/{chatbot_id}/documents")
+        r.raise_for_status()
+        return r.json()["items"]
 
     async def upload_document(self, chatbot_id: str, file_path: str, filename: str, mime: str) -> dict:
-        async with self._client() as c:
-            with open(file_path, "rb") as f:
-                r = await c.post(
-                    f"/api/v1/chatbots/{chatbot_id}/documents",
-                    files={"file": (filename, f, mime)},
-                )
-            r.raise_for_status()
-            return r.json()["document"]
+        with open(file_path, "rb") as f:
+            r = await self._http.post(
+                f"/api/v1/chatbots/{chatbot_id}/documents",
+                files={"file": (filename, f, mime)},
+            )
+        r.raise_for_status()
+        return r.json()["document"]
 
     async def delete_document(self, chatbot_id: str, document_id: str) -> None:
-        async with self._client() as c:
-            r = await c.delete(f"/api/v1/chatbots/{chatbot_id}/documents/{document_id}")
-            r.raise_for_status()
+        r = await self._http.delete(f"/api/v1/chatbots/{chatbot_id}/documents/{document_id}")
+        r.raise_for_status()
 
     async def get_analytics_summary(self, chatbot_id: str | None = None) -> dict:
         params = {}
         if chatbot_id:
             params["chatbot_id"] = chatbot_id
-        async with self._client() as c:
-            r = await c.get("/api/v1/analytics/summary", params=params)
-            r.raise_for_status()
-            return r.json()
+        r = await self._http.get("/api/v1/analytics/summary", params=params)
+        r.raise_for_status()
+        return r.json()
 
     async def list_conversations(
         self,
@@ -67,22 +62,17 @@ class APIClient:
         params = {"limit": limit, "no_answer_only": str(no_answer_only).lower()}
         if chatbot_id:
             params["chatbot_id"] = chatbot_id
-        async with self._client() as c:
-            r = await c.get("/api/v1/analytics/conversations", params=params)
-            r.raise_for_status()
-            return r.json()["items"]
+        r = await self._http.get("/api/v1/analytics/conversations", params=params)
+        r.raise_for_status()
+        return r.json()["items"]
 
     async def get_conversation_messages(self, conversation_id: str) -> list[dict]:
-        async with self._client() as c:
-            r = await c.get(f"/api/v1/analytics/conversations/{conversation_id}/messages")
-            r.raise_for_status()
-            return r.json()["messages"]
+        r = await self._http.get(f"/api/v1/analytics/conversations/{conversation_id}/messages")
+        r.raise_for_status()
+        return r.json()["messages"]
 
     def chat_stream(self, chatbot_id: str, message: str, session_id: str, on_sources=None) -> Iterator[str]:
-        """Synchronous generator — Gradio streaming requires sync generators.
-
-        on_sources: optional callable(list[dict]) called once when the sources event arrives.
-        """
+        """Synchronous generator — Gradio streaming requires sync generators."""
         import json as _json
         with httpx.Client(base_url=API_BASE, timeout=120) as c:
             with c.stream(

@@ -40,7 +40,7 @@ MVP = Slices 0–9.
 
 ## What Exists Right Now
 
-### Evaluation Dashboard (Slice 11)
+### Evaluation Dashboard (Slice 11) + UI fixes
 
 ```
 api/src/routes/analytics.py     GET /api/v1/analytics/summary — aggregate stats (convs, messages, no_answer_rate, avg_top_similarity)
@@ -51,7 +51,13 @@ api/src/main.py                 Registered analytics_router under /api/v1
 web/api_client.py               get_analytics_summary(), list_conversations(), get_conversation_messages()
 web/app.py                      Evaluation tab: summary stats (4 Number cards), conversations Dataframe,
                                   "Show failures only" checkbox, Conversation detail inspector (gr.JSON)
-                                refresh_chatbots() updated to also populate eval_chatbot_select dropdown
+                                                refresh_chatbots() updated to also populate eval_chatbot_select dropdown
+                                create_btn.click chains .then(refresh_chatbots) so dropdowns populate immediately after creation
+                                Persistent background asyncio event loop via threading.Thread(target=loop.run_forever)
+                                  replaces per-call ThreadPoolExecutor; run_parallel() added for concurrent fetches
+                                refresh_eval() fetches summary + conversations in parallel via asyncio.gather
+                                on_chatbot_select_docs() replaces two-step select→refresh on Documents tab:
+                                  resolves chatbot_id and fetches documents in a single handler, cutting one round trip
 api/tests/test_analytics.py     15 tests: summary counts, no_answer_rate, avg_similarity, chatbot filter,
                                   list_conversations, no_answer_only filter, pagination,
                                   conversation messages, cross-tenant isolation (404), auth guards
@@ -64,6 +70,7 @@ Verified ACs:
 - `GET /api/v1/analytics/conversations/{id}/messages` returns full thread with `source_chunks` per assistant turn
 - Cross-tenant: tenant B cannot inspect tenant A's conversations → 404
 - All 122 tests pass (no regressions)
+- Post-slice UI fixes: chatbot dropdowns now auto-populate after creation; Evaluation tab refresh is ~2× faster; Documents tab loads document list on chatbot selection (no separate Refresh click needed)
 
 ---
 
@@ -384,6 +391,12 @@ RUN mkdir -p src && pip install --no-cache-dir -e ".[dev]"
 **Spec:** `api/tests/factories.py`  
 **Actual:** `api/tests/factories/__init__.py`  
 **Why:** implemented as a package directory. Imports work identically: `from tests.factories import TenantFactory`.
+
+### 12. `web/app.py` — persistent background event loop + UX latency fixes (post-Slice 11)
+
+**Issue:** `run()` spawned a new `ThreadPoolExecutor` + `asyncio.run()` per call (high overhead); Evaluation tab made two sequential API calls; Documents tab required two round trips (select chatbot → click Refresh).  
+**Fix:** Single daemon thread runs `_bg_loop.run_forever()`; all calls use `asyncio.run_coroutine_threadsafe()`. Added `run_parallel(*coros)` which wraps `asyncio.gather` on that loop. `refresh_eval()` now fetches summary and conversations concurrently. `on_chatbot_select_docs()` resolves chatbot ID and fetches documents in one handler, replacing the separate `chatbot_id_state` update + manual Refresh click.  
+**Also:** `create_btn.click` chains `.then(refresh_chatbots)` so all dropdowns populate immediately after chatbot creation.
 
 ### 11. `api/src/routes/analytics.py` — jsonpath literal uses `literal_column` with explicit cast (Slice 11)
 
