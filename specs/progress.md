@@ -24,7 +24,7 @@ A SaaS knowledge base chatbot builder in Python. Operators upload documents (PDF
 | 3 | Chatbot CRUD | **Done** | Full CRUD; 18 tests pass. See deviations below. |
 | 4 | Document Upload | **Done** | 18/18 tests pass. S3 + ARQ mocked in tests. See deviations below. |
 | 5 | Parsing Worker | **Done** | 17/17 tests pass. Worker boots and registers `ingest_document`. See deviations below. |
-| 6 | Chunk + Embed + Persist | Not started | |
+| 6 | Chunk + Embed + Persist | **Done** | 78/78 tests pass (34 new). Chunks table populated; embeddings via OpenAI. See deviations below. |
 | 7 | Retrieval Function | Not started | |
 | 8 | Chat Endpoint | Not started | |
 | 9 | Gradio UI | Not started | |
@@ -39,6 +39,29 @@ MVP = Slices 0–9.
 ---
 
 ## What Exists Right Now
+
+### Chunk + Embed + Persist (Slice 6)
+
+```
+api/src/worker/chunker.py       chunk_text(): tiktoken cl100k_base; TARGET=400 tokens, OVERLAP=50, MIN=20; pure function
+api/src/lib/embedder.py         embed_chunks(): AsyncOpenAI, batches 100/call, tenacity retry (3×, exp backoff 1–4s)
+api/tests/fakes/__init__.py     empty package marker
+api/tests/fakes/openai.py       fake_embed_chunks(): returns [0.1]*1536 per item, no real API calls
+api/src/worker/jobs.py          Extended: parse → chunk → idempotency-delete → embed+insert (batch 100) → ready
+api/tests/test_worker.py        34 tests (was 17): chunker units, embedder units, chunk DB fields,
+                                no-chunks error, embed-failure wipe, idempotency retry, status transitions
+```
+
+Verified ACs:
+- Sufficient text → `chunks` table has rows with 1536-dim `embedding`, ascending `chunk_index`, `embedding_model = 'text-embedding-3-small'`
+- `Document.status` transitions: `pending` → `processing` → `ready`
+- `Document.error_reason` is null on success
+- Short text (< 20 tokens) → `status = error`, `error_reason = "document produced no chunks"`
+- Embed failure → `status = error`, `error_reason` set, partial chunks wiped in same transaction
+- Retry after partial run: idempotency step deletes prior chunks, fresh chunks inserted cleanly
+- All 78 tests pass (no regressions in Slices 1–5)
+
+---
 
 ### Infrastructure (Slice 0)
 
@@ -268,10 +291,10 @@ Auth is in demo mode (`AUTH_MODE=demo`). Any Bearer token value works. `Authoriz
 
 ## Next Step
 
-Implement **Slice 6 — Chunk + Embed + Persist**.
+Implement **Slice 7 — Retrieval Function**.
 
 Prompt:
 ```
-Read specs/slices/00-prompt-prefix.md then implement: Slice 6 — Chunk + Embed + Persist
-(specs/slices/slice-06-chunk-embed-persist.md)
+Read specs/slices/00-prompt-prefix.md then implement: Slice 7 — Retrieval Function
+(specs/slices/slice-07-retrieval.md)
 ```

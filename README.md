@@ -32,6 +32,11 @@ curl "localhost:8000/api/v1/chatbots/$BOT_ID/documents" \
   -H "Authorization: Bearer alice"
 # → {"items": [...], "total": 1, "has_more": false}
 
+# The worker automatically processes uploaded documents:
+#   pending → processing → ready   (chunks embedded into pgvector)
+# Poll the document list to check status. Once "ready", the document
+# is searchable. On failure, status = "error" with error_reason set.
+
 # Gradio UI: http://localhost:7860
 # MinIO console: http://localhost:9001  (minioadmin / minioadmin)
 ```
@@ -109,8 +114,10 @@ For production:
 api/                          FastAPI app + ARQ worker
   src/main.py                 App entrypoint
   src/worker/__init__.py      ARQ WorkerSettings entrypoint
-  src/worker/jobs.py          ARQ job: ingest_document
+  src/worker/jobs.py          ARQ job: ingest_document (parse → chunk → embed → persist)
   src/worker/parsers/         PDF / DOCX / HTML / TXT parsers
+  src/worker/chunker.py       chunk_text() — token-aware sentence chunker (tiktoken)
+  src/lib/embedder.py         embed_chunks() — OpenAI text-embedding-3-small, batched + retried
   pyproject.toml              Dependencies
 web/                          Gradio UI
   app.py                      UI entrypoint
