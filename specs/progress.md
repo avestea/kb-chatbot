@@ -27,7 +27,7 @@ A SaaS knowledge base chatbot builder in Python. Operators upload documents (PDF
 | 6 | Chunk + Embed + Persist | **Done** | 78/78 tests pass (34 new). Chunks table populated; embeddings via OpenAI. See deviations below. |
 | 7 | Retrieval Function | **Done** | 84/84 tests pass (6 new). pgvector HNSW cosine search. See deviations below. |
 | 8 | Chat Endpoint | **Done** | 100/100 tests pass (16 new). SSE streaming via Anthropic Claude; conversation + message persistence. See deviations below. |
-| 9 | Gradio UI | Not started | |
+| 9 | Gradio UI | **Done** | Gradio 6 (resolved from >=5.0.0). 3-tab UI: Chatbots/Documents/Chat. All ACs verified. See deviations below. |
 | 10 | Explainability | Not started | |
 | 11 | Evaluation Dashboard | Not started | |
 | 12 | Hybrid Search | Not started | |
@@ -39,6 +39,25 @@ MVP = Slices 0–9.
 ---
 
 ## What Exists Right Now
+
+### Gradio UI (Slice 9)
+
+```
+web/requirements.txt    gradio>=5.0.0 (resolves to 6.x), httpx>=0.28.0, python-dotenv>=1.0.0
+web/api_client.py       APIClient: list/create chatbots, list/upload/delete documents, chat_stream() sync generator
+web/app.py              3-tab Gradio app: Chatbots (list + create), Documents (select + upload), Chat (streaming)
+web/Dockerfile          python:3.12-slim, pip install -r requirements.txt, EXPOSE 7860
+```
+
+Verified ACs:
+- `docker compose up -d` → UI healthy, HTTP 200 at `http://localhost:7860`
+- Enter `alice` as token, click Refresh on Chatbots tab → chatbot list appears
+- Create chatbot → appears in list on next refresh
+- Select chatbot in Documents tab → upload a file → status shows `pending`
+- Refresh documents after worker finishes → status shows `ready`
+- Switch to Chat tab, select chatbot, ask question → streaming SSE answer appears word-by-word
+- Off-topic question → "I don't have information about that..." fallback response
+- All 100 API tests still pass (no regressions)
 
 ### Chat Endpoint (Slice 8)
 
@@ -312,6 +331,19 @@ RUN mkdir -p src && pip install --no-cache-dir -e ".[dev]"
 **Actual:** `api/tests/factories/__init__.py`  
 **Why:** implemented as a package directory. Imports work identically: `from tests.factories import TenantFactory`.
 
+### 10. `web/app.py` — Gradio 6 compatibility fixes (Slice 9)
+
+**Spec:** Written for Gradio 5 API.  
+**Actual (Gradio 6.x resolves from `>=5.0.0`):**
+
+1. `gr.Chatbot(type="tuples")` → removed `type` kwarg (Gradio 6 dropped it; only messages format remains). Updated `chat_handler` to yield `[{"role": "user", "content": ...}, {"role": "assistant", "content": ...}]` dicts.
+2. `gr.Blocks(theme=...)` → moved `theme=gr.themes.Soft()` to `demo.launch()` (Gradio 6 requires this).
+3. `demo.launch(show_api=False)` → removed `show_api` (Gradio 6 dropped that parameter).
+4. `refresh_btn.click(outputs=[chatbot_table, gr.Dropdown(), chatbot_choices_state])` → replaced anonymous `gr.Dropdown()` with both `chatbot_select_docs` and `chatbot_select_chat` so both tab dropdowns are populated on refresh.
+5. Added `chatbot_select_chat.change` event handler (missing in spec) so selecting a chatbot in the Chat tab updates `chatbot_id_state`.
+6. Import changed from `from web.api_client import APIClient` to `from api_client import APIClient` — both files live in `/app` (Docker WORKDIR); there is no `web/` subdirectory at runtime.
+7. `chat_handler` spec used `return session_id` at end of generator — Python generators cannot return values to callers; replaced with `yield accumulated + [...], session_id` on final yield.
+
 ---
 
 ## How to Run
@@ -341,10 +373,10 @@ Auth is in demo mode (`AUTH_MODE=demo`). Any Bearer token value works. `Authoriz
 
 ## Next Step
 
-Implement **Slice 9 — Gradio UI**.
+Implement **Slice 10 — Explainability**.
 
 Prompt:
 ```
-Read specs/slices/00-prompt-prefix.md then implement: Slice 9 — Gradio UI
-(specs/slices/slice-09-gradio-ui.md)
+Read specs/slices/00-prompt-prefix.md then implement: Slice 10 — Explainability
+(specs/slices/slice-10-explainability.md)
 ```

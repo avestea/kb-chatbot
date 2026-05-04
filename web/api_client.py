@@ -1,0 +1,71 @@
+import httpx
+import os
+from typing import Iterator
+
+API_BASE = os.getenv("API_BASE_URL", "http://api:8000")
+
+
+class APIClient:
+    def __init__(self, token: str):
+        self.token = token
+        self.headers = {"Authorization": f"Bearer {token}"}
+
+    def _client(self) -> httpx.AsyncClient:
+        return httpx.AsyncClient(base_url=API_BASE, headers=self.headers, timeout=30)
+
+    async def list_chatbots(self) -> list[dict]:
+        async with self._client() as c:
+            r = await c.get("/api/v1/chatbots")
+            r.raise_for_status()
+            return r.json()["items"]
+
+    async def create_chatbot(self, name: str, system_prompt: str | None = None) -> dict:
+        async with self._client() as c:
+            r = await c.post("/api/v1/chatbots", json={
+                "name": name,
+                "system_prompt_override": system_prompt or None,
+            })
+            r.raise_for_status()
+            return r.json()["chatbot"]
+
+    async def list_documents(self, chatbot_id: str) -> list[dict]:
+        async with self._client() as c:
+            r = await c.get(f"/api/v1/chatbots/{chatbot_id}/documents")
+            r.raise_for_status()
+            return r.json()["items"]
+
+    async def upload_document(self, chatbot_id: str, file_path: str, filename: str, mime: str) -> dict:
+        async with self._client() as c:
+            with open(file_path, "rb") as f:
+                r = await c.post(
+                    f"/api/v1/chatbots/{chatbot_id}/documents",
+                    files={"file": (filename, f, mime)},
+                )
+            r.raise_for_status()
+            return r.json()["document"]
+
+    async def delete_document(self, chatbot_id: str, document_id: str) -> None:
+        async with self._client() as c:
+            r = await c.delete(f"/api/v1/chatbots/{chatbot_id}/documents/{document_id}")
+            r.raise_for_status()
+
+    def chat_stream(self, chatbot_id: str, message: str, session_id: str) -> Iterator[str]:
+        """Synchronous generator — Gradio streaming requires sync generators."""
+        import json as _json
+        with httpx.Client(base_url=API_BASE, timeout=120) as c:
+            with c.stream(
+                "POST",
+                f"/api/v1/chat/{chatbot_id}/message",
+                json={"message": message, "session_id": session_id},
+            ) as response:
+                response.raise_for_status()
+                buffer = ""
+                for line in response.iter_lines():
+                    if line.startswith("data: "):
+                        try:
+                            data = _json.loads(line[6:])
+                            if "text" in data:
+                                buffer += data["text"]
+                                yield buffer  # Gradio streaming: yield cumulative text
+                        except _json.JSONDecodeError:
+                            pass

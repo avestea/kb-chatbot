@@ -1457,12 +1457,14 @@ source = { editable = "web" }
 dependencies = [
     { name = "gradio" },
     { name = "httpx" },
+    { name = "python-dotenv" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "gradio", specifier = ">=4.36" },
-    { name = "httpx", specifier = ">=0.27" },
+    { name = "gradio", specifier = ">=5.0.0" },
+    { name = "httpx", specifier = ">=0.28.0" },
+    { name = "python-dotenv", specifier = ">=1.0.0" },
 ]
 
 [[package]]

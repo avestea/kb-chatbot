@@ -7,6 +7,10 @@ name = "kb-chatbot-web"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
-    "gradio>=4.36",
-    "httpx>=0.27",
+    "gradio>=5.0.0",
+    "httpx>=0.28.0",
+    "python-dotenv>=1.0.0",
 ]
+
+[tool.setuptools]
+py-modules = ["api_client", "app"]
