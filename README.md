@@ -37,9 +37,18 @@ curl "localhost:8000/api/v1/chatbots/$BOT_ID/documents" \
 # Poll the document list to check status. Once "ready", the document
 # is searchable. On failure, status = "error" with error_reason set.
 
-# Retrieve relevant chunks (used internally by the chat endpoint):
-# retrieve_context() in api/src/rag/retrieve.py — vector search via pgvector HNSW index.
-# Returns top-K chunks by cosine similarity; Python-side min_similarity filter (default 0.75).
+# The worker automatically processes uploaded documents:
+# poll document list until status = "ready", then chat against it:
+DOC_ID="<id from upload>"
+
+# Chat Endpoint (Slice 8) — public SSE stream, no auth required:
+curl -N -X POST "localhost:8000/api/v1/chat/$BOT_ID/message" \
+  -H "Content-Type: application/json" \
+  -d '{"message":"What is the refund policy?","session_id":"my-session-1"}'
+# → event: meta   data: {"conversation_id":"...","source_count":2}
+# → event: token  data: {"text":"Returns are"}
+# → event: token  data: {"text":" accepted within 30 days."}
+# → event: done   data: {"message_id":"..."}
 
 # Gradio UI: http://localhost:7860
 # MinIO console: http://localhost:9001  (minioadmin / minioadmin)
@@ -123,6 +132,9 @@ api/                          FastAPI app + ARQ worker
   src/worker/chunker.py       chunk_text() — token-aware sentence chunker (tiktoken)
   src/lib/embedder.py         embed_chunks() — OpenAI text-embedding-3-small, batched + retried
   src/rag/retrieve.py         retrieve_context() — pgvector HNSW cosine search + similarity filter
+  src/rag/prompt.py           build_system_prompt() — injects retrieved chunks into SYSTEM_TEMPLATE
+  src/lib/llm.py              stream_completion() — Anthropic streaming wrapper (TokenEvent/UsageEvent)
+  src/routes/chat.py          POST /api/v1/chat/{chatbot_id}/message — public SSE endpoint
   pyproject.toml              Dependencies
 web/                          Gradio UI
   app.py                      UI entrypoint

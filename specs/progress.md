@@ -26,7 +26,7 @@ A SaaS knowledge base chatbot builder in Python. Operators upload documents (PDF
 | 5 | Parsing Worker | **Done** | 17/17 tests pass. Worker boots and registers `ingest_document`. See deviations below. |
 | 6 | Chunk + Embed + Persist | **Done** | 78/78 tests pass (34 new). Chunks table populated; embeddings via OpenAI. See deviations below. |
 | 7 | Retrieval Function | **Done** | 84/84 tests pass (6 new). pgvector HNSW cosine search. See deviations below. |
-| 8 | Chat Endpoint | Not started | |
+| 8 | Chat Endpoint | **Done** | 100/100 tests pass (16 new). SSE streaming via Anthropic Claude; conversation + message persistence. See deviations below. |
 | 9 | Gradio UI | Not started | |
 | 10 | Explainability | Not started | |
 | 11 | Evaluation Dashboard | Not started | |
@@ -39,6 +39,36 @@ MVP = Slices 0–9.
 ---
 
 ## What Exists Right Now
+
+### Chat Endpoint (Slice 8)
+
+```
+api/src/config/chat.py          MAX_MESSAGE_TOKENS=4000, MAX_CONTEXT_TURNS=10, MAX_PROMPT_TOKENS=12000
+api/src/lib/llm.py              stream_completion(): Anthropic AsyncAnthropic streaming; yields TokenEvent/UsageEvent
+api/src/rag/prompt.py           build_system_prompt(): SYSTEM_TEMPLATE + context injection; PROMPT_VERSION="v1"
+api/src/schemas/chat.py         ChatRequest: message (1-4000 chars), session_id (1-128 chars)
+api/src/routes/chat.py          POST /api/v1/chat/{chatbot_id}/message — public SSE endpoint, no auth required
+api/src/main.py                 Registered chat_router under /api/v1
+api/tests/fakes/anthropic.py    FakeStreamCompletion: configurable async generator, yields TokenEvent + UsageEvent
+api/tests/test_chat.py          16 tests: SSE event order, token content, persistence, no_answer flag,
+                                conversation upsert, error events, validation
+```
+
+Verified ACs:
+- SSE event order: `meta` → `token...` → `done`
+- `meta` event contains `conversation_id` and `source_count`
+- `token` events carry the streamed text fragments
+- `done` event contains valid `message_id` UUID
+- Assistant `Message` row: `tokens_used` = input+output tokens, `source_chunk_ids` = chunk IDs, `prompt_version = "v1"`
+- `no_answer=True` when response contains "I don't have information about that"
+- Soft-deleted chatbot → `error` SSE event (no crash)
+- Unknown chatbot ID → `error` SSE event
+- Same `session_id` → same `conversation_id` (upsert via unique constraint)
+- Different `session_ids` → different `conversation_id`s
+- Empty message / missing session_id → 422 (Pydantic validation before SSE stream opens)
+- All 100 tests pass (no regressions)
+
+---
 
 ### Retrieval Function (Slice 7)
 
@@ -311,10 +341,10 @@ Auth is in demo mode (`AUTH_MODE=demo`). Any Bearer token value works. `Authoriz
 
 ## Next Step
 
-Implement **Slice 8 — Chat Endpoint**.
+Implement **Slice 9 — Gradio UI**.
 
 Prompt:
 ```
-Read specs/slices/00-prompt-prefix.md then implement: Slice 8 — Chat Endpoint
-(specs/slices/slice-08-chat-endpoint.md)
+Read specs/slices/00-prompt-prefix.md then implement: Slice 9 — Gradio UI
+(specs/slices/slice-09-gradio-ui.md)
 ```

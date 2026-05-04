@@ -49,10 +49,12 @@ async def generic_error_handler(request: Request, exc: Exception):
 from src.auth.webhook import router as webhook_router
 from src.routes.chatbots import router as chatbots_router
 from src.routes.documents import router as documents_router
+from src.routes.chat import router as chat_router
 
 app.include_router(webhook_router)
 app.include_router(chatbots_router, prefix="/api/v1")
 app.include_router(documents_router, prefix="/api/v1")
+app.include_router(chat_router, prefix="/api/v1")
 
 
 @app.get("/health")
