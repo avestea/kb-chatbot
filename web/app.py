@@ -232,6 +232,10 @@ with gr.Blocks(title="KB Chatbot") as demo:
         create_chatbot_handler,
         inputs=[token_input, new_name, new_prompt],
         outputs=[create_status],
+    ).then(
+        refresh_chatbots,
+        inputs=[token_input],
+        outputs=[chatbot_table, chatbot_select_docs, chatbot_select_chat, chatbot_choices_state, eval_chatbot_select],
     )
 
     chatbot_select_docs.change(
