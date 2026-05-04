@@ -132,22 +132,32 @@ def chat_handler(message, history, token, chatbot_id, session_id_state):
             ],
             session_id_state,
             gr.update(visible=False),
+            gr.update(visible=False),
         )
         return
     session_id = session_id_state or str(uuid.uuid4())
     accumulated = history + [{"role": "user", "content": message}]
 
     sources_captured = []
+    retrieval_query_captured = []
 
     def capture_sources(sources):
         sources_captured.extend(sources)
 
+    def capture_meta(meta):
+        rq = meta.get("retrieval_query", "")
+        if rq:
+            retrieval_query_captured.append(rq)
+
     partial = ""
-    for chunk in get_client(token).chat_stream(chatbot_id, message, session_id, on_sources=capture_sources):
+    for chunk in get_client(token).chat_stream(
+        chatbot_id, message, session_id, on_sources=capture_sources, on_meta=capture_meta
+    ):
         partial = chunk
         yield (
             accumulated + [{"role": "assistant", "content": partial}],
             session_id,
+            gr.update(visible=False),
             gr.update(visible=False),
         )
 
@@ -155,10 +165,12 @@ def chat_handler(message, history, token, chatbot_id, session_id_state):
         [s["index"], s["document_name"], s.get("match_type", "semantic"), s["similarity"], s["snippet"]]
         for s in sources_captured
     ]
+    rq = retrieval_query_captured[0] if retrieval_query_captured else ""
     yield (
         accumulated + [{"role": "assistant", "content": partial or "..."}],
         session_id,
         gr.update(value=rows, visible=bool(rows)),
+        gr.update(value=f"*Searched for: {rq}*" if rq else "", visible=bool(rq)),
     )
 
 # ─── Layout ──────────────────────────────────────────────────────────────────
@@ -209,6 +221,7 @@ with gr.Blocks(title="KB Chatbot") as demo:
             label="Sources used",
             visible=False,
         )
+        retrieval_query_display = gr.Markdown(value="", visible=False)
 
     with gr.Tab("Evaluation"):
         gr.Markdown("## Chatbot Quality Dashboard")
@@ -281,13 +294,13 @@ with gr.Blocks(title="KB Chatbot") as demo:
     send_btn.click(
         chat_handler,
         inputs=[msg_input, chat_interface, token_input, chatbot_id_state, session_id_state],
-        outputs=[chat_interface, session_id_state, sources_display],
+        outputs=[chat_interface, session_id_state, sources_display, retrieval_query_display],
     ).then(lambda: "", outputs=[msg_input])
 
     msg_input.submit(
         chat_handler,
         inputs=[msg_input, chat_interface, token_input, chatbot_id_state, session_id_state],
-        outputs=[chat_interface, session_id_state, sources_display],
+        outputs=[chat_interface, session_id_state, sources_display, retrieval_query_display],
     ).then(lambda: "", outputs=[msg_input])
 
     refresh_eval_btn.click(

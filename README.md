@@ -154,6 +154,7 @@ api/                          FastAPI app + ARQ worker
   src/worker/chunker.py       chunk_text() — token-aware sentence chunker (tiktoken)
   src/lib/embedder.py         embed_chunks() — OpenAI text-embedding-3-small, batched + retried
   src/rag/retrieve.py         retrieve_context() — hybrid BM25+vector search merged with RRF (Slice 12)
+  src/rag/rewrite.py          rewrite_query() — Haiku LLM rewrites follow-ups into self-contained queries (Slice 13)
   src/rag/prompt.py           build_system_prompt() — injects retrieved chunks into SYSTEM_TEMPLATE
   src/lib/llm.py              stream_completion() — Anthropic streaming wrapper (TokenEvent/UsageEvent)
   src/routes/chat.py          POST /api/v1/chat/{chatbot_id}/message — public SSE endpoint
@@ -170,6 +171,18 @@ specs/
   progress.md                 Implementation status + LLM handoff notes
   slices/                     Slice-by-slice implementation prompts
 ```
+
+## Query Rewriting (Slice 13)
+
+Before embedding, follow-up queries are rewritten by `claude-haiku-4-5-20251001` into self-contained questions:
+
+| Turn | Raw query | Rewritten for retrieval |
+|---|---|---|
+| 1 | "What is the refund policy?" | _(no rewrite — no history)_ |
+| 2 | "And for digital goods?" | "What is the refund policy for digital goods?" |
+| 3 | "Who do I contact?" | "Who do I contact to request a refund?" |
+
+The LLM always sees the **original** message — the rewrite is invisible to the end user and only affects what is searched. If the rewrite fails for any reason, the original query is used. The `meta` SSE event includes `"retrieval_query"` when the query was changed.
 
 ## Retrieval Strategy (Slice 12)
 

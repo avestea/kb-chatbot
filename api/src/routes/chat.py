@@ -10,6 +10,7 @@ from src.db.base import async_session
 from src.db.models import Chatbot, Conversation, Message
 from src.lib.llm import stream_completion, ChatTurn
 from src.rag.retrieve import retrieve_context
+from src.rag.rewrite import rewrite_query
 from src.rag.prompt import build_system_prompt, PROMPT_VERSION
 from src.schemas.chat import ChatRequest
 from src.lib.log import log
@@ -59,6 +60,14 @@ async def _generate(chatbot_id: str, body: ChatRequest, request: Request):
             conv_id = (await db.execute(stmt)).scalar_one()
             await db.commit()
 
+            # Load prior messages for query rewriting (before inserting current message)
+            prior_rows = (await db.execute(
+                select(Message)
+                .where(Message.conversation_id == conv_id)
+                .order_by(Message.created_at)
+            )).scalars().all()
+            prior_history = [{"role": m.role, "content": m.content} for m in prior_rows]
+
             user_msg = Message(
                 conversation_id=conv_id,
                 role="user",
@@ -67,7 +76,11 @@ async def _generate(chatbot_id: str, body: ChatRequest, request: Request):
             db.add(user_msg)
             await db.commit()
 
-        chunks = await retrieve_context(chatbot_id=chatbot_id, query=body.message)
+        try:
+            retrieval_query = await rewrite_query(body.message, prior_history)
+        except Exception:
+            retrieval_query = body.message
+        chunks = await retrieve_context(chatbot_id=chatbot_id, query=retrieval_query)
 
         sources_payload = [
             {
@@ -81,10 +94,13 @@ async def _generate(chatbot_id: str, body: ChatRequest, request: Request):
             for i, c in enumerate(chunks)
         ]
 
-        yield sse("meta", {
+        meta_data: dict = {
             "conversation_id": str(conv_id),
             "source_count": len(chunks),
-        })
+        }
+        if retrieval_query != body.message:
+            meta_data["retrieval_query"] = retrieval_query
+        yield sse("meta", meta_data)
 
         if sources_payload:
             yield sse("sources", {"sources": sources_payload})

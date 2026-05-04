@@ -250,7 +250,8 @@ async def test_same_session_id_returns_same_conversation(client, chatbot_id):
     fake_llm = FakeStreamCompletion(tokens=["Hi"])
 
     with patch("src.routes.chat.stream_completion", new=fake_llm), \
-         patch("src.routes.chat.retrieve_context", new=AsyncMock(return_value=NO_CHUNKS)):
+         patch("src.routes.chat.retrieve_context", new=AsyncMock(return_value=NO_CHUNKS)), \
+         patch("src.routes.chat.rewrite_query", new=AsyncMock(side_effect=lambda msg, hist: msg)):
         r1 = await client.post(
             f"/api/v1/chat/{chatbot_id}/message",
             json={"message": "first", "session_id": "shared-sess"},
@@ -273,7 +274,8 @@ async def test_different_session_ids_get_different_conversations(client, chatbot
     fake_llm = FakeStreamCompletion(tokens=["Hi"])
 
     with patch("src.routes.chat.stream_completion", new=fake_llm), \
-         patch("src.routes.chat.retrieve_context", new=AsyncMock(return_value=NO_CHUNKS)):
+         patch("src.routes.chat.retrieve_context", new=AsyncMock(return_value=NO_CHUNKS)), \
+         patch("src.routes.chat.rewrite_query", new=AsyncMock(side_effect=lambda msg, hist: msg)):
         r1 = await client.post(
             f"/api/v1/chat/{chatbot_id}/message",
             json={"message": "hello", "session_id": "sess-a"},
@@ -587,3 +589,87 @@ async def test_sources_match_type_keyword_for_zero_similarity(client, chatbot_id
     sources = src_event["data"]["sources"]
     assert sources[0]["match_type"] == "keyword"
     assert sources[0]["similarity"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Slice 13 — Query Rewriting: chat endpoint integration
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_retrieve_context_receives_rewritten_query(client, chatbot_id):
+    """retrieve_context is called with the rewritten query, not the raw message."""
+    fake_llm = FakeStreamCompletion(tokens=["OK"])
+    rewritten = "What is the refund policy for digital goods?"
+
+    with patch("src.routes.chat.stream_completion", new=fake_llm), \
+         patch("src.routes.chat.retrieve_context", new=AsyncMock(return_value=NO_CHUNKS)) as mock_retrieve, \
+         patch("src.routes.chat.rewrite_query", new=AsyncMock(return_value=rewritten)):
+        await client.post(
+            f"/api/v1/chat/{chatbot_id}/message",
+            json={"message": "And for digital goods?", "session_id": "sess-rw-1"},
+        )
+
+    mock_retrieve.assert_called_once()
+    assert mock_retrieve.call_args.kwargs["query"] == rewritten
+
+
+@pytest.mark.asyncio
+async def test_meta_includes_retrieval_query_when_rewritten(client, chatbot_id):
+    """meta event contains retrieval_query when the query was rewritten."""
+    fake_llm = FakeStreamCompletion(tokens=["OK"])
+    original = "And for digital goods?"
+    rewritten = "What is the refund policy for digital goods?"
+
+    with patch("src.routes.chat.stream_completion", new=fake_llm), \
+         patch("src.routes.chat.retrieve_context", new=AsyncMock(return_value=NO_CHUNKS)), \
+         patch("src.routes.chat.rewrite_query", new=AsyncMock(return_value=rewritten)):
+        resp = await client.post(
+            f"/api/v1/chat/{chatbot_id}/message",
+            json={"message": original, "session_id": "sess-rw-meta"},
+        )
+
+    events = parse_sse(resp.text)
+    meta = next(e for e in events if e["event"] == "meta")
+    assert "retrieval_query" in meta["data"]
+    assert meta["data"]["retrieval_query"] == rewritten
+
+
+@pytest.mark.asyncio
+async def test_meta_omits_retrieval_query_when_unchanged(client, chatbot_id):
+    """meta event does not include retrieval_query when the query was not changed."""
+    fake_llm = FakeStreamCompletion(tokens=["OK"])
+    original = "What is the refund policy?"
+
+    with patch("src.routes.chat.stream_completion", new=fake_llm), \
+         patch("src.routes.chat.retrieve_context", new=AsyncMock(return_value=NO_CHUNKS)), \
+         patch("src.routes.chat.rewrite_query", new=AsyncMock(return_value=original)):
+        resp = await client.post(
+            f"/api/v1/chat/{chatbot_id}/message",
+            json={"message": original, "session_id": "sess-rw-same"},
+        )
+
+    events = parse_sse(resp.text)
+    meta = next(e for e in events if e["event"] == "meta")
+    assert "retrieval_query" not in meta["data"]
+
+
+@pytest.mark.asyncio
+async def test_rewrite_failure_falls_back_to_original_for_retrieval(client, chatbot_id):
+    """If rewrite_query raises, chat never breaks — retrieval uses original message."""
+    fake_llm = FakeStreamCompletion(tokens=["OK"])
+
+    async def failing_rewrite(msg, hist):
+        raise RuntimeError("LLM unavailable")
+
+    with patch("src.routes.chat.stream_completion", new=fake_llm), \
+         patch("src.routes.chat.retrieve_context", new=AsyncMock(return_value=NO_CHUNKS)) as mock_retrieve, \
+         patch("src.routes.chat.rewrite_query", new=failing_rewrite):
+        resp = await client.post(
+            f"/api/v1/chat/{chatbot_id}/message",
+            json={"message": "What is the warranty?", "session_id": "sess-rw-fail"},
+        )
+
+    # Chat must complete without an error event
+    events = parse_sse(resp.text)
+    assert not any(e["event"] == "error" for e in events)
+    assert any(e["event"] == "done" for e in events)

@@ -71,7 +71,7 @@ class APIClient:
         r.raise_for_status()
         return r.json()["messages"]
 
-    def chat_stream(self, chatbot_id: str, message: str, session_id: str, on_sources=None) -> Iterator[str]:
+    def chat_stream(self, chatbot_id: str, message: str, session_id: str, on_sources=None, on_meta=None) -> Iterator[str]:
         """Synchronous generator — Gradio streaming requires sync generators."""
         import json as _json
         with httpx.Client(base_url=API_BASE, timeout=120) as c:
@@ -91,7 +91,9 @@ class APIClient:
                             data = _json.loads(line[6:])
                         except _json.JSONDecodeError:
                             continue
-                        if current_event == "sources" and on_sources:
+                        if current_event == "meta" and on_meta:
+                            on_meta(data)
+                        elif current_event == "sources" and on_sources:
                             on_sources(data.get("sources", []))
                         elif current_event == "token" and "text" in data:
                             buffer += data["text"]

@@ -31,7 +31,7 @@ A SaaS knowledge base chatbot builder in Python. Operators upload documents (PDF
 | 10 | Explainability | **Done** | 107/107 tests pass (7 new). sources SSE event + source_chunks column. See deviations below. |
 | 11 | Evaluation Dashboard | **Done** | 122/122 tests pass (15 new). Analytics routes + Gradio Evaluation tab. See deviations below. |
 | 12 | Hybrid Search | **Done** | 128/128 tests pass (6 new). BM25 + vector + RRF merge; keyword-only hits surface with similarity=0.0. See deviations below. |
-| 13 | Query Rewriting | Not started | |
+| 13 | Query Rewriting | **Done** | 141/141 tests pass (13 new). Haiku rewrites follow-up queries before retrieval; rewrite failure falls back gracefully. |
 | 14 | Feedback | Not started | |
 
 MVP = Slices 0–9.
@@ -39,6 +39,41 @@ MVP = Slices 0–9.
 ---
 
 ## What Exists Right Now
+
+### Query Rewriting (Slice 13)
+
+```
+api/src/rag/rewrite.py          rewrite_query(message, history): AsyncAnthropic Haiku call;
+                                  empty history → immediate return (no API call);
+                                  any exception → falls back to original message
+api/src/routes/chat.py          _generate() extended:
+                                  1. Load prior_history from conversation (before inserting current msg)
+                                  2. try/except around rewrite_query() → retrieval_query
+                                  3. retrieve_context(query=retrieval_query) instead of body.message
+                                  4. meta event includes "retrieval_query" only when different from original
+web/api_client.py               chat_stream() new on_meta callback; fires on "meta" SSE event
+web/app.py                      chat_handler: captures retrieval_query via on_meta;
+                                  retrieval_query_display gr.Markdown added below sources_display;
+                                  4 outputs now (was 3); event wiring updated
+api/tests/test_rewrite.py       9 unit tests: empty history, happy path, whitespace, exception fallback,
+                                  empty response fallback, truncation to 6 turns, all turns used, prompt structure
+api/tests/test_chat.py          4 new tests: retrieve receives rewritten query, meta includes retrieval_query,
+                                  meta omits retrieval_query when unchanged, rewrite failure → no error event
+                                  2 patched tests: shared-session tests now mock rewrite_query
+```
+
+Verified ACs:
+- Turn 1 (no history): `rewrite_query` returns original immediately, no LLM call
+- Turn 2+ with follow-up: `retrieve_context` receives self-contained query from Haiku rewrite
+- LLM (`stream_completion`) always sees original `body.message` — rewrite is retrieval-only
+- `rewrite_query` exception (API failure) falls back to original; chat never emits error event
+- `meta` event includes `"retrieval_query"` only when query was actually changed
+- Gradio Chat tab shows `"Searched for: <rewritten>"` subtitle below sources when query was rewritten
+- All 141 tests pass (no regressions)
+
+**Note:** Wrapped `rewrite_query()` call in `_generate` with its own `try/except` in addition to the exception handling inside `rewrite_query` itself. This is belt-and-suspenders: even if `rewrite_query` itself has a bug that prevents the internal fallback, `_generate` will not propagate the exception.
+
+---
 
 ### Hybrid Search (Slice 12)
 
@@ -484,10 +519,10 @@ Auth is in demo mode (`AUTH_MODE=demo`). Any Bearer token value works. `Authoriz
 
 ## Next Step
 
-Implement **Slice 13 — Query Rewriting**.
+Implement **Slice 14 — Feedback**.
 
 Prompt:
 ```
-Read specs/slices/00-prompt-prefix.md then implement: Slice 13 — Query Rewriting
-(specs/slices/slice-13-query-rewriting.md)
+Read specs/slices/00-prompt-prefix.md then implement: Slice 14 — Feedback
+(specs/slices/slice-14-feedback.md)
 ```
