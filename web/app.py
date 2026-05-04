@@ -69,20 +69,41 @@ def upload_handler(token, chatbot_id, file):
 
 def chat_handler(message, history, token, chatbot_id, session_id_state):
     if not chatbot_id:
-        yield history + [
-            {"role": "user", "content": message},
-            {"role": "assistant", "content": "Select a chatbot first."},
-        ], session_id_state
+        yield (
+            history + [
+                {"role": "user", "content": message},
+                {"role": "assistant", "content": "Select a chatbot first."},
+            ],
+            session_id_state,
+            gr.update(visible=False),
+        )
         return
     session_id = session_id_state or str(uuid.uuid4())
     accumulated = history + [{"role": "user", "content": message}]
 
-    partial = ""
-    for chunk in get_client(token).chat_stream(chatbot_id, message, session_id):
-        partial = chunk
-        yield accumulated + [{"role": "assistant", "content": partial}], session_id
+    sources_captured = []
 
-    yield accumulated + [{"role": "assistant", "content": partial or "..."}], session_id
+    def capture_sources(sources):
+        sources_captured.extend(sources)
+
+    partial = ""
+    for chunk in get_client(token).chat_stream(chatbot_id, message, session_id, on_sources=capture_sources):
+        partial = chunk
+        yield (
+            accumulated + [{"role": "assistant", "content": partial}],
+            session_id,
+            gr.update(visible=False),
+        )
+
+    rows = [
+        [s["index"], s["document_name"], s["similarity"], s["snippet"]]
+        for s in sources_captured
+    ]
+    yield (
+        accumulated + [{"role": "assistant", "content": partial or "..."}],
+        session_id,
+        gr.update(value=rows, visible=bool(rows)),
+    )
 
 # ─── Layout ──────────────────────────────────────────────────────────────────
 
@@ -127,6 +148,11 @@ with gr.Blocks(title="KB Chatbot") as demo:
                 scale=4,
             )
             send_btn = gr.Button("Send", variant="primary", scale=1)
+        sources_display = gr.Dataframe(
+            headers=["#", "Document", "Similarity", "Snippet"],
+            label="Sources used",
+            visible=False,
+        )
 
     # ─── Event wiring ────────────────────────────────────────────────────────
 
@@ -166,13 +192,13 @@ with gr.Blocks(title="KB Chatbot") as demo:
     send_btn.click(
         chat_handler,
         inputs=[msg_input, chat_interface, token_input, chatbot_id_state, session_id_state],
-        outputs=[chat_interface, session_id_state],
+        outputs=[chat_interface, session_id_state, sources_display],
     ).then(lambda: "", outputs=[msg_input])
 
     msg_input.submit(
         chat_handler,
         inputs=[msg_input, chat_interface, token_input, chatbot_id_state, session_id_state],
-        outputs=[chat_interface, session_id_state],
+        outputs=[chat_interface, session_id_state, sources_display],
     ).then(lambda: "", outputs=[msg_input])
 
 if __name__ == "__main__":

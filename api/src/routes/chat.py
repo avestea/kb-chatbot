@@ -69,10 +69,24 @@ async def _generate(chatbot_id: str, body: ChatRequest, request: Request):
 
         chunks = await retrieve_context(chatbot_id=chatbot_id, query=body.message)
 
+        sources_payload = [
+            {
+                "index": i + 1,
+                "chunk_id": c.id,
+                "document_name": c.document_name,
+                "snippet": c.content[:300],
+                "similarity": round(c.similarity, 3),
+            }
+            for i, c in enumerate(chunks)
+        ]
+
         yield sse("meta", {
             "conversation_id": str(conv_id),
             "source_count": len(chunks),
         })
+
+        if sources_payload:
+            yield sse("sources", {"sources": sources_payload})
 
         system_prompt = build_system_prompt(chatbot.name, chunks)
         messages = [ChatTurn(role="user", content=body.message)]
@@ -104,7 +118,8 @@ async def _generate(chatbot_id: str, body: ChatRequest, request: Request):
                 conversation_id=conv_id,
                 role="assistant",
                 content=assistant_text,
-                source_chunk_ids=[c.id for c in chunks],
+                source_chunk_ids=[c["chunk_id"] for c in sources_payload],
+                source_chunks=sources_payload if sources_payload else None,
                 tokens_used=input_tokens + output_tokens,
                 no_answer=no_answer,
                 prompt_version=PROMPT_VERSION,

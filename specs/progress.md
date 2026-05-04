@@ -28,7 +28,7 @@ A SaaS knowledge base chatbot builder in Python. Operators upload documents (PDF
 | 7 | Retrieval Function | **Done** | 84/84 tests pass (6 new). pgvector HNSW cosine search. See deviations below. |
 | 8 | Chat Endpoint | **Done** | 100/100 tests pass (16 new). SSE streaming via Anthropic Claude; conversation + message persistence. See deviations below. |
 | 9 | Gradio UI | **Done** | Gradio 6 (resolved from >=5.0.0). 3-tab UI: Chatbots/Documents/Chat. All ACs verified. See deviations below. |
-| 10 | Explainability | Not started | |
+| 10 | Explainability | **Done** | 107/107 tests pass (7 new). sources SSE event + source_chunks column. See deviations below. |
 | 11 | Evaluation Dashboard | Not started | |
 | 12 | Hybrid Search | Not started | |
 | 13 | Query Rewriting | Not started | |
@@ -39,6 +39,33 @@ MVP = Slices 0–9.
 ---
 
 ## What Exists Right Now
+
+### Explainability (Slice 10)
+
+```
+api/alembic/versions/0002_add_source_chunks_to_messages.py
+                                ALTER TABLE messages ADD COLUMN source_chunks JSONB
+api/src/db/models.py            Added: source_chunks: Mapped[Optional[List[dict]]] = mapped_column(JSONB)
+api/src/routes/chat.py          Extended _generate(): build sources_payload, yield sources SSE event
+                                (between meta and first token), persist source_chunks on assistant message
+web/api_client.py               chat_stream() updated: on_sources callback, two-line SSE buffer (event:/data:)
+web/app.py                      Chat tab: added sources_display gr.Dataframe; chat_handler yields 3 outputs;
+                                sources visible only after streaming completes
+api/tests/test_chat.py          7 new tests: sources event present, event order, payload structure,
+                                no sources when no chunks, source_chunks persisted, source_chunks null,
+                                similarity scores in range
+```
+
+Verified ACs:
+- SSE event order: `meta` → `sources` → `token...` → `done` (sources only when chunks exist)
+- `sources` event payload: `index`, `chunk_id`, `document_name`, `snippet` (first 300 chars), `similarity` rounded to 3dp
+- Off-topic question (no chunks) → no `sources` event; sources panel hidden
+- `messages.source_chunks` JSONB populated for every assistant message with chunks; NULL when no chunks
+- Similarity scores between 0 and 1
+- Sources panel visible only after `done`; hidden while streaming
+- All 107 tests pass (no regressions)
+
+---
 
 ### Gradio UI (Slice 9)
 
@@ -373,10 +400,10 @@ Auth is in demo mode (`AUTH_MODE=demo`). Any Bearer token value works. `Authoriz
 
 ## Next Step
 
-Implement **Slice 10 — Explainability**.
+Implement **Slice 11 — Evaluation Dashboard**.
 
 Prompt:
 ```
-Read specs/slices/00-prompt-prefix.md then implement: Slice 10 — Explainability
-(specs/slices/slice-10-explainability.md)
+Read specs/slices/00-prompt-prefix.md then implement: Slice 11 — Evaluation Dashboard
+(specs/slices/slice-11-evaluation-dashboard.md)
 ```

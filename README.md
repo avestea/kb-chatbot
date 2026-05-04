@@ -41,21 +41,24 @@ curl "localhost:8000/api/v1/chatbots/$BOT_ID/documents" \
 # poll document list until status = "ready", then chat against it:
 DOC_ID="<id from upload>"
 
-# Chat Endpoint (Slice 8) — public SSE stream, no auth required:
+# Chat Endpoint (Slice 8+10) — public SSE stream, no auth required:
 curl -N -X POST "localhost:8000/api/v1/chat/$BOT_ID/message" \
   -H "Content-Type: application/json" \
   -d '{"message":"What is the refund policy?","session_id":"my-session-1"}'
-# → event: meta   data: {"conversation_id":"...","source_count":2}
-# → event: token  data: {"text":"Returns are"}
-# → event: token  data: {"text":" accepted within 30 days."}
-# → event: done   data: {"message_id":"..."}
+# → event: meta    data: {"conversation_id":"...","source_count":2}
+# → event: sources data: {"sources":[{"index":1,"chunk_id":"...","document_name":"policy.pdf","similarity":0.92,"snippet":"Returns accepted..."}]}
+# → event: token   data: {"text":"Returns are"}
+# → event: token   data: {"text":" accepted within 30 days."}
+# → event: done    data: {"message_id":"..."}
 
-# Gradio UI (Slice 9): http://localhost:7860
+# Gradio UI (Slice 9+10): http://localhost:7860
 #   1. Enter "alice" in the API Token field
 #   2. Chatbots tab → Refresh → see your chatbots; Create New Chatbot
 #   3. Documents tab → Select Chatbot → Upload File → status "pending"
 #      (worker processes it; click Refresh Documents until status is "ready")
 #   4. Chat tab → Select Chatbot → type question → streaming answer appears
+#      After each answer, a "Sources used" table shows document name,
+#      similarity score, and snippet for each retrieved chunk.
 
 # MinIO console: http://localhost:9001  (minioadmin / minioadmin)
 ```

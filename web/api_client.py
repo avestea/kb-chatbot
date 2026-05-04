@@ -49,8 +49,11 @@ class APIClient:
             r = await c.delete(f"/api/v1/chatbots/{chatbot_id}/documents/{document_id}")
             r.raise_for_status()
 
-    def chat_stream(self, chatbot_id: str, message: str, session_id: str) -> Iterator[str]:
-        """Synchronous generator — Gradio streaming requires sync generators."""
+    def chat_stream(self, chatbot_id: str, message: str, session_id: str, on_sources=None) -> Iterator[str]:
+        """Synchronous generator — Gradio streaming requires sync generators.
+
+        on_sources: optional callable(list[dict]) called once when the sources event arrives.
+        """
         import json as _json
         with httpx.Client(base_url=API_BASE, timeout=120) as c:
             with c.stream(
@@ -59,13 +62,18 @@ class APIClient:
                 json={"message": message, "session_id": session_id},
             ) as response:
                 response.raise_for_status()
+                current_event = ""
                 buffer = ""
                 for line in response.iter_lines():
-                    if line.startswith("data: "):
+                    if line.startswith("event: "):
+                        current_event = line[7:].strip()
+                    elif line.startswith("data: "):
                         try:
                             data = _json.loads(line[6:])
-                            if "text" in data:
-                                buffer += data["text"]
-                                yield buffer  # Gradio streaming: yield cumulative text
                         except _json.JSONDecodeError:
-                            pass
+                            continue
+                        if current_event == "sources" and on_sources:
+                            on_sources(data.get("sources", []))
+                        elif current_event == "token" and "text" in data:
+                            buffer += data["text"]
+                            yield buffer

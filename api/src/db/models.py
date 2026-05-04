@@ -116,6 +116,7 @@ class Message(Base):
     role: Mapped[str] = mapped_column(String(10), nullable=False)  # 'user' | 'assistant'
     content: Mapped[str] = mapped_column(Text, nullable=False)
     source_chunk_ids: Mapped[Optional[List[str]]] = mapped_column(JSONB)
+    source_chunks: Mapped[Optional[List[dict]]] = mapped_column(JSONB)
     tokens_used: Mapped[Optional[int]] = mapped_column(Integer)
     no_answer: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     prompt_version: Mapped[Optional[str]] = mapped_column(Text)

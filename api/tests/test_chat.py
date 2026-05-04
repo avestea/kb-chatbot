@@ -380,3 +380,162 @@ def test_build_system_prompt_without_chunks():
 def test_prompt_version_constant():
     from src.rag.prompt import PROMPT_VERSION
     assert PROMPT_VERSION == "v1"
+
+
+# ---------------------------------------------------------------------------
+# Slice 10 — Explainability: sources SSE event + source_chunks persistence
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_sources_event_present_when_chunks_exist(client, chatbot_id):
+    """sources event is emitted when retrieved chunks exist."""
+    fake_llm = FakeStreamCompletion(tokens=["Answer"])
+
+    with patch("src.routes.chat.stream_completion", new=fake_llm), \
+         patch("src.routes.chat.retrieve_context", new=AsyncMock(return_value=FAKE_CHUNKS)):
+        resp = await client.post(
+            f"/api/v1/chat/{chatbot_id}/message",
+            json={"message": "refund policy?", "session_id": "sess-src-1"},
+        )
+
+    events = parse_sse(resp.text)
+    event_types = [e["event"] for e in events]
+    assert "sources" in event_types
+
+
+@pytest.mark.asyncio
+async def test_sources_event_before_token_events(client, chatbot_id):
+    """sources event appears before the first token event."""
+    fake_llm = FakeStreamCompletion(tokens=["Hello"])
+
+    with patch("src.routes.chat.stream_completion", new=fake_llm), \
+         patch("src.routes.chat.retrieve_context", new=AsyncMock(return_value=FAKE_CHUNKS)):
+        resp = await client.post(
+            f"/api/v1/chat/{chatbot_id}/message",
+            json={"message": "refund?", "session_id": "sess-src-order"},
+        )
+
+    events = parse_sse(resp.text)
+    event_types = [e["event"] for e in events]
+    sources_idx = event_types.index("sources")
+    token_idx = event_types.index("token")
+    assert sources_idx < token_idx
+
+
+@pytest.mark.asyncio
+async def test_sources_event_payload_structure(client, chatbot_id):
+    """sources event payload has index, chunk_id, document_name, snippet, similarity."""
+    fake_llm = FakeStreamCompletion(tokens=["OK"])
+
+    with patch("src.routes.chat.stream_completion", new=fake_llm), \
+         patch("src.routes.chat.retrieve_context", new=AsyncMock(return_value=FAKE_CHUNKS)):
+        resp = await client.post(
+            f"/api/v1/chat/{chatbot_id}/message",
+            json={"message": "refund?", "session_id": "sess-src-payload"},
+        )
+
+    events = parse_sse(resp.text)
+    src_event = next(e for e in events if e["event"] == "sources")
+    sources = src_event["data"]["sources"]
+    assert len(sources) == 1
+    s = sources[0]
+    assert s["index"] == 1
+    assert "chunk_id" in s
+    assert s["document_name"] == FAKE_CHUNKS[0].document_name
+    assert s["snippet"] == FAKE_CHUNKS[0].content[:300]
+    assert 0.0 <= s["similarity"] <= 1.0
+
+
+@pytest.mark.asyncio
+async def test_no_sources_event_when_no_chunks(client, chatbot_id):
+    """sources event is NOT emitted when no chunks are retrieved."""
+    fake_llm = FakeStreamCompletion(tokens=["I don't have information about that in my knowledge base."])
+
+    with patch("src.routes.chat.stream_completion", new=fake_llm), \
+         patch("src.routes.chat.retrieve_context", new=AsyncMock(return_value=NO_CHUNKS)):
+        resp = await client.post(
+            f"/api/v1/chat/{chatbot_id}/message",
+            json={"message": "what is the airspeed velocity?", "session_id": "sess-nosrc"},
+        )
+
+    events = parse_sse(resp.text)
+    assert not any(e["event"] == "sources" for e in events)
+
+
+@pytest.mark.asyncio
+async def test_source_chunks_persisted_on_message(client, chatbot_id):
+    """source_chunks JSONB is populated on the assistant message."""
+    fake_llm = FakeStreamCompletion(tokens=["Answer"], input_tokens=10, output_tokens=5)
+
+    with patch("src.routes.chat.stream_completion", new=fake_llm), \
+         patch("src.routes.chat.retrieve_context", new=AsyncMock(return_value=FAKE_CHUNKS)):
+        resp = await client.post(
+            f"/api/v1/chat/{chatbot_id}/message",
+            json={"message": "refund?", "session_id": "sess-src-persist"},
+        )
+
+    events = parse_sse(resp.text)
+    done = next(e for e in events if e["event"] == "done")
+    msg_id = done["data"]["message_id"]
+
+    async with async_session_factory() as db:
+        from sqlalchemy import select as sa_select
+        msg = (await db.execute(
+            sa_select(Message).where(Message.id == uuid.UUID(msg_id))
+        )).scalar_one()
+
+    assert msg.source_chunks is not None
+    assert len(msg.source_chunks) == 1
+    s = msg.source_chunks[0]
+    assert s["index"] == 1
+    assert s["document_name"] == FAKE_CHUNKS[0].document_name
+    assert 0.0 <= s["similarity"] <= 1.0
+
+
+@pytest.mark.asyncio
+async def test_source_chunks_null_when_no_chunks(client, chatbot_id):
+    """source_chunks is NULL on the message when no context chunks exist."""
+    fake_llm = FakeStreamCompletion(tokens=["I don't have information about that in my knowledge base."])
+
+    with patch("src.routes.chat.stream_completion", new=fake_llm), \
+         patch("src.routes.chat.retrieve_context", new=AsyncMock(return_value=NO_CHUNKS)):
+        resp = await client.post(
+            f"/api/v1/chat/{chatbot_id}/message",
+            json={"message": "nobody knows", "session_id": "sess-src-null"},
+        )
+
+    events = parse_sse(resp.text)
+    done = next(e for e in events if e["event"] == "done")
+    msg_id = done["data"]["message_id"]
+
+    async with async_session_factory() as db:
+        from sqlalchemy import select as sa_select
+        msg = (await db.execute(
+            sa_select(Message).where(Message.id == uuid.UUID(msg_id))
+        )).scalar_one()
+
+    assert msg.source_chunks is None
+
+
+@pytest.mark.asyncio
+async def test_similarity_scores_in_valid_range(client, chatbot_id):
+    """All similarity scores in sources payload are between 0 and 1."""
+    multi_chunks = [
+        RetrievedChunk(id=str(uuid.uuid4()), document_id=str(uuid.uuid4()),
+                       document_name="doc1.pdf", content="chunk one", similarity=0.92),
+        RetrievedChunk(id=str(uuid.uuid4()), document_id=str(uuid.uuid4()),
+                       document_name="doc2.pdf", content="chunk two", similarity=0.78),
+    ]
+    fake_llm = FakeStreamCompletion(tokens=["OK"])
+
+    with patch("src.routes.chat.stream_completion", new=fake_llm), \
+         patch("src.routes.chat.retrieve_context", new=AsyncMock(return_value=multi_chunks)):
+        resp = await client.post(
+            f"/api/v1/chat/{chatbot_id}/message",
+            json={"message": "test?", "session_id": "sess-sim-range"},
+        )
+
+    events = parse_sse(resp.text)
+    src_event = next(e for e in events if e["event"] == "sources")
+    for s in src_event["data"]["sources"]:
+        assert 0.0 <= s["similarity"] <= 1.0
