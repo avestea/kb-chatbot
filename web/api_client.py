@@ -71,7 +71,19 @@ class APIClient:
         r.raise_for_status()
         return r.json()["messages"]
 
-    def chat_stream(self, chatbot_id: str, message: str, session_id: str, on_sources=None, on_meta=None) -> Iterator[str]:
+    async def submit_feedback(self, message_id: str, rating: int) -> None:
+        r = await self._http.post("/api/v1/feedback", json={"message_id": message_id, "rating": rating})
+        r.raise_for_status()
+
+    def chat_stream(
+        self,
+        chatbot_id: str,
+        message: str,
+        session_id: str,
+        on_sources=None,
+        on_meta=None,
+        on_done=None,
+    ) -> Iterator[str]:
         """Synchronous generator — Gradio streaming requires sync generators."""
         import json as _json
         with httpx.Client(base_url=API_BASE, timeout=120) as c:
@@ -98,3 +110,6 @@ class APIClient:
                         elif current_event == "token" and "text" in data:
                             buffer += data["text"]
                             yield buffer
+                        elif current_event == "done":
+                            if on_done and "message_id" in data:
+                                on_done(data["message_id"])

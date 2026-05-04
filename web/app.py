@@ -104,12 +104,15 @@ def refresh_eval(token, chatbot_name, chatbot_choices, failures_only):
 
     no_answer_pct = round(summary.get("no_answer_rate", 0) * 100, 1)
     avg_sim = summary.get("avg_top_similarity")
+    satisfaction = summary.get("satisfaction_rate")
+    satisfaction_pct = round(satisfaction * 100, 1) if satisfaction is not None else 0
 
     return (
         summary.get("total_conversations", 0),
         summary.get("total_messages", 0),
         no_answer_pct,
         avg_sim if avg_sim is not None else 0,
+        satisfaction_pct,
         gr.update(value=rows),
     )
 
@@ -123,6 +126,13 @@ def inspect_conversation(token, conv_id):
 
 # ─── Tab: Chat ───────────────────────────────────────────────────────────────
 
+def send_feedback(token, message_id, rating):
+    if not message_id:
+        return "No message to rate."
+    run(get_client(token).submit_feedback(message_id, rating))
+    return "Thanks for your feedback!" if rating == 1 else "Got it — we'll improve."
+
+
 def chat_handler(message, history, token, chatbot_id, session_id_state):
     if not chatbot_id:
         yield (
@@ -132,6 +142,8 @@ def chat_handler(message, history, token, chatbot_id, session_id_state):
             ],
             session_id_state,
             gr.update(visible=False),
+            "",
+            gr.update(visible=False),
             gr.update(visible=False),
         )
         return
@@ -140,6 +152,7 @@ def chat_handler(message, history, token, chatbot_id, session_id_state):
 
     sources_captured = []
     retrieval_query_captured = []
+    message_id_captured = []
 
     def capture_sources(sources):
         sources_captured.extend(sources)
@@ -149,14 +162,22 @@ def chat_handler(message, history, token, chatbot_id, session_id_state):
         if rq:
             retrieval_query_captured.append(rq)
 
+    def capture_done(message_id):
+        message_id_captured.append(message_id)
+
     partial = ""
     for chunk in get_client(token).chat_stream(
-        chatbot_id, message, session_id, on_sources=capture_sources, on_meta=capture_meta
+        chatbot_id, message, session_id,
+        on_sources=capture_sources,
+        on_meta=capture_meta,
+        on_done=capture_done,
     ):
         partial = chunk
         yield (
             accumulated + [{"role": "assistant", "content": partial}],
             session_id,
+            gr.update(visible=False),
+            "",
             gr.update(visible=False),
             gr.update(visible=False),
         )
@@ -166,10 +187,13 @@ def chat_handler(message, history, token, chatbot_id, session_id_state):
         for s in sources_captured
     ]
     rq = retrieval_query_captured[0] if retrieval_query_captured else ""
+    message_id = message_id_captured[0] if message_id_captured else ""
     yield (
         accumulated + [{"role": "assistant", "content": partial or "..."}],
         session_id,
         gr.update(value=rows, visible=bool(rows)),
+        message_id,
+        gr.update(visible=bool(message_id)),
         gr.update(value=f"*Searched for: {rq}*" if rq else "", visible=bool(rq)),
     )
 
@@ -180,6 +204,7 @@ with gr.Blocks(title="KB Chatbot") as demo:
     token_input = gr.Textbox(label="API Token", type="password", placeholder="devtest:your-clerk-id")
     chatbot_id_state = gr.State("")
     session_id_state = gr.State("")
+    last_message_id_state = gr.State("")
     chatbot_choices_state = gr.State({})
 
     with gr.Tab("Chatbots"):
@@ -222,6 +247,10 @@ with gr.Blocks(title="KB Chatbot") as demo:
             visible=False,
         )
         retrieval_query_display = gr.Markdown(value="", visible=False)
+        with gr.Row(visible=False) as feedback_row:
+            thumbs_up_btn = gr.Button("👍", variant="secondary", scale=1)
+            thumbs_down_btn = gr.Button("👎", variant="secondary", scale=1)
+            feedback_status = gr.Markdown("")
 
     with gr.Tab("Evaluation"):
         gr.Markdown("## Chatbot Quality Dashboard")
@@ -235,6 +264,7 @@ with gr.Blocks(title="KB Chatbot") as demo:
             stat_total_msgs = gr.Number(label="Total messages", interactive=False)
             stat_no_answer = gr.Number(label="No-answer rate (%)", interactive=False)
             stat_avg_sim = gr.Number(label="Avg top similarity", interactive=False)
+            stat_satisfaction = gr.Number(label="Satisfaction rate (%)", interactive=False)
 
         gr.Markdown("### Conversations")
         show_failures_only = gr.Checkbox(label="Show failures only (no-answer responses) — then press Refresh", value=False)
@@ -294,19 +324,30 @@ with gr.Blocks(title="KB Chatbot") as demo:
     send_btn.click(
         chat_handler,
         inputs=[msg_input, chat_interface, token_input, chatbot_id_state, session_id_state],
-        outputs=[chat_interface, session_id_state, sources_display, retrieval_query_display],
+        outputs=[chat_interface, session_id_state, sources_display, last_message_id_state, feedback_row, retrieval_query_display],
     ).then(lambda: "", outputs=[msg_input])
 
     msg_input.submit(
         chat_handler,
         inputs=[msg_input, chat_interface, token_input, chatbot_id_state, session_id_state],
-        outputs=[chat_interface, session_id_state, sources_display, retrieval_query_display],
+        outputs=[chat_interface, session_id_state, sources_display, last_message_id_state, feedback_row, retrieval_query_display],
     ).then(lambda: "", outputs=[msg_input])
+
+    thumbs_up_btn.click(
+        lambda token, mid: send_feedback(token, mid, 1),
+        inputs=[token_input, last_message_id_state],
+        outputs=[feedback_status],
+    )
+    thumbs_down_btn.click(
+        lambda token, mid: send_feedback(token, mid, -1),
+        inputs=[token_input, last_message_id_state],
+        outputs=[feedback_status],
+    )
 
     refresh_eval_btn.click(
         refresh_eval,
         inputs=[token_input, eval_chatbot_select, chatbot_choices_state, show_failures_only],
-        outputs=[stat_total_convs, stat_total_msgs, stat_no_answer, stat_avg_sim, conv_table],
+        outputs=[stat_total_convs, stat_total_msgs, stat_no_answer, stat_avg_sim, stat_satisfaction, conv_table],
     )
     inspect_btn.click(
         inspect_conversation,

@@ -1,10 +1,10 @@
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select, func, cast, Float, literal_column
+from sqlalchemy import select, func, cast, Float, literal_column, Integer
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
 
 from src.db.base import get_db
-from src.db.models import Chatbot, Conversation, Message
+from src.db.models import Chatbot, Conversation, Message, Feedback
 from src.db.tenant_scope import tenant_where
 from src.auth.authenticate import get_current_tenant, AuthenticatedTenant
 
@@ -29,6 +29,10 @@ async def analytics_summary(
             "no_answer_count": 0,
             "no_answer_rate": 0.0,
             "avg_top_similarity": None,
+            "total_feedback": 0,
+            "thumbs_up": 0,
+            "thumbs_down": 0,
+            "satisfaction_rate": None,
         }
 
     total_convs = (await db.execute(
@@ -73,12 +77,31 @@ async def analytics_summary(
         )
     )).scalar_one()
 
+    feedback_stats = (await db.execute(
+        select(
+            func.count(Feedback.id).label("total"),
+            func.sum(cast(Feedback.rating == 1, Integer)).label("thumbs_up"),
+            func.sum(cast(Feedback.rating == -1, Integer)).label("thumbs_down"),
+        )
+        .join(Chatbot, Feedback.chatbot_id == Chatbot.id)
+        .where(Chatbot.id.in_(bot_ids))
+    )).mappings().one()
+
+    total_feedback = int(feedback_stats["total"] or 0)
+    thumbs_up = int(feedback_stats["thumbs_up"] or 0)
+    thumbs_down = int(feedback_stats["thumbs_down"] or 0)
+    satisfaction_rate = round(thumbs_up / total_feedback, 3) if total_feedback else None
+
     return {
         "total_conversations": total_convs,
         "total_messages": total_msgs,
         "no_answer_count": no_answer_count,
         "no_answer_rate": no_answer_rate,
         "avg_top_similarity": round(float(avg_sim_result), 3) if avg_sim_result else None,
+        "total_feedback": total_feedback,
+        "thumbs_up": thumbs_up,
+        "thumbs_down": thumbs_down,
+        "satisfaction_rate": satisfaction_rate,
     }
 
 
@@ -169,11 +192,12 @@ async def get_conversation_messages(
         from src.lib.errors import NotFoundError
         raise NotFoundError()
 
-    messages = (await db.execute(
-        select(Message)
+    rows = (await db.execute(
+        select(Message, Feedback.rating)
+        .outerjoin(Feedback, Feedback.message_id == Message.id)
         .where(Message.conversation_id == conversation_id)
         .order_by(Message.created_at)
-    )).scalars().all()
+    )).all()
 
     return {
         "conversation_id": str(conversation_id),
@@ -186,7 +210,8 @@ async def get_conversation_messages(
                 "tokens_used": m.tokens_used,
                 "source_chunks": m.source_chunks or [],
                 "created_at": m.created_at.isoformat(),
+                "rating": rating,
             }
-            for m in messages
+            for m, rating in rows
         ],
     }

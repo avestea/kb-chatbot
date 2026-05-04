@@ -32,13 +32,50 @@ A SaaS knowledge base chatbot builder in Python. Operators upload documents (PDF
 | 11 | Evaluation Dashboard | **Done** | 122/122 tests pass (15 new). Analytics routes + Gradio Evaluation tab. See deviations below. |
 | 12 | Hybrid Search | **Done** | 128/128 tests pass (6 new). BM25 + vector + RRF merge; keyword-only hits surface with similarity=0.0. See deviations below. |
 | 13 | Query Rewriting | **Done** | 141/141 tests pass (13 new). Haiku rewrites follow-up queries before retrieval; rewrite failure falls back gracefully. |
-| 14 | Feedback | Not started | |
+| 14 | Feedback | **Done** | 154/154 tests pass (13 new). Thumbs up/down per message; upsert on re-vote; satisfaction_rate in analytics. |
 
 MVP = Slices 0–9.
 
 ---
 
 ## What Exists Right Now
+
+### Feedback (Slice 14)
+
+```
+api/alembic/versions/0004_add_feedback.py
+                                CREATE TABLE feedback (id, message_id→messages, chatbot_id→chatbots,
+                                  tenant_id→tenants, rating smallint CHECK(-1,1), created_at);
+                                UNIQUE INDEX feedback_message_uq(message_id); INDEX feedback_chatbot_idx(chatbot_id)
+api/src/db/models.py            Added: Feedback ORM model (unique=True on message_id FK)
+api/src/routes/feedback.py      POST /api/v1/feedback — tenant-scoped; upsert via ON CONFLICT DO UPDATE;
+                                  validates rating ∈ {-1,1} via model_validator; message must belong to tenant
+api/src/main.py                 Registered feedback_router under /api/v1
+api/src/routes/analytics.py     analytics_summary() extended: total_feedback, thumbs_up, thumbs_down, satisfaction_rate
+                                get_conversation_messages() extended: outerjoin Feedback → rating per message (None if unrated)
+web/api_client.py               submit_feedback(message_id, rating) async method;
+                                  chat_stream() new on_done callback fires on "done" SSE event
+web/app.py                      Chat tab: feedback_row (👍/👎 buttons + feedback_status) appears after each response;
+                                  last_message_id_state gr.State captures message_id from done event;
+                                  chat_handler yields 6 outputs (was 4); send_feedback() helper
+                                Evaluation tab: stat_satisfaction gr.Number card (Satisfaction rate %);
+                                  refresh_eval() returns 6 values (was 5)
+api/tests/test_feedback.py      13 tests: thumbs up, thumbs down, upsert, rating=0 rejected, out-of-range rejected,
+                                  auth guard, cross-tenant 404, nonexistent message 404,
+                                  summary fields present, summary counts, thumbs-down counter,
+                                  messages rating=None before feedback, messages rating=1 after feedback
+```
+
+Verified ACs:
+- `POST /api/v1/feedback` with `rating=1` or `rating=-1` → 201 `{"message_id":"...","rating":...}`
+- Submitting feedback twice for same message upserts (no duplicate rows)
+- Cross-tenant message → 404
+- `thumbs_up`, `thumbs_down`, `satisfaction_rate` present in analytics summary
+- Conversation inspector shows `rating` (1, -1, or null) on each message
+- 👍/👎 buttons appear in Gradio Chat tab after each response; clicking sends feedback
+- All 154 tests pass (no regressions)
+
+---
 
 ### Query Rewriting (Slice 13)
 
@@ -519,10 +556,4 @@ Auth is in demo mode (`AUTH_MODE=demo`). Any Bearer token value works. `Authoriz
 
 ## Next Step
 
-Implement **Slice 14 — Feedback**.
-
-Prompt:
-```
-Read specs/slices/00-prompt-prefix.md then implement: Slice 14 — Feedback
-(specs/slices/slice-14-feedback.md)
-```
+All planned slices (0–14) are complete. MVP (Slices 0–9) and all feature extensions are implemented and tested.
