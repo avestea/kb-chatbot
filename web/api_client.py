@@ -1,6 +1,6 @@
 import httpx
 import os
-from typing import Iterator
+from typing import AsyncIterator
 
 API_BASE = os.getenv("API_BASE_URL", "http://api:8000")
 
@@ -75,7 +75,7 @@ class APIClient:
         r = await self._http.post("/api/v1/feedback", json={"message_id": message_id, "rating": rating})
         r.raise_for_status()
 
-    def chat_stream(
+    async def chat_stream(
         self,
         chatbot_id: str,
         message: str,
@@ -83,11 +83,11 @@ class APIClient:
         on_sources=None,
         on_meta=None,
         on_done=None,
-    ) -> Iterator[str]:
-        """Synchronous generator — Gradio streaming requires sync generators."""
+    ) -> AsyncIterator[str]:
         import json as _json
-        with httpx.Client(base_url=API_BASE, timeout=120) as c:
-            with c.stream(
+        timeout = httpx.Timeout(connect=10.0, read=None, write=10.0, pool=10.0)
+        async with httpx.AsyncClient(base_url=API_BASE, timeout=timeout) as c:
+            async with c.stream(
                 "POST",
                 f"/api/v1/chat/{chatbot_id}/message",
                 json={"message": message, "session_id": session_id},
@@ -95,7 +95,7 @@ class APIClient:
                 response.raise_for_status()
                 current_event = ""
                 buffer = ""
-                for line in response.iter_lines():
+                async for line in response.aiter_lines():
                     if line.startswith("event: "):
                         current_event = line[7:].strip()
                     elif line.startswith("data: "):
@@ -113,3 +113,4 @@ class APIClient:
                         elif current_event == "done":
                             if on_done and "message_id" in data:
                                 on_done(data["message_id"])
+                            return

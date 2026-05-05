@@ -47,7 +47,10 @@ async def test_parse_html_removes_scripts():
 @pytest.mark.asyncio
 async def test_parse_pdf_extracts_text():
     mock_page = MagicMock()
-    mock_page.extract_text.return_value = "PDF content"
+    mock_page.extract_words.return_value = [
+        {"text": "PDF", "top": 10},
+        {"text": "content", "top": 10},
+    ]
     mock_pdf = MagicMock()
     mock_pdf.pages = [mock_page]
     mock_pdf.__enter__ = MagicMock(return_value=mock_pdf)

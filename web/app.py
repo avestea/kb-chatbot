@@ -34,13 +34,20 @@ def get_client(token: str) -> APIClient:
 
 # ─── Tab: Chatbots ───────────────────────────────────────────────────────────
 
+def _bots_to_markdown(bots):
+    if not bots:
+        return "*No chatbots yet.*"
+    lines = ["| ID | Name | Created |", "|---|---|---|"]
+    for b in bots:
+        lines.append(f"| `{b['id'][:42]}` | {b['name']} | {b['created_at'][:19]} |")
+    return "\n".join(lines)
+
 def refresh_chatbots(token):
     bots = run(get_client(token).list_chatbots())
-    rows = [[b["id"], b["name"], b["created_at"]] for b in bots]
     choices = {b["name"]: b["id"] for b in bots}
     names = list(choices.keys())
     return (
-        gr.update(value=rows),
+        gr.update(value=_bots_to_markdown(bots)),
         gr.update(choices=names),
         gr.update(choices=names),
         choices,
@@ -55,14 +62,20 @@ def create_chatbot_handler(token, name, system_prompt):
 
 # ─── Tab: Documents ──────────────────────────────────────────────────────────
 
-def _doc_rows(token, chatbot_id):
-    if not chatbot_id:
-        return []
-    docs = run(get_client(token).list_documents(chatbot_id))
-    return [[d["id"], d["filename"], d["status"], d.get("error_reason", "")] for d in docs]
+def _docs_to_markdown(docs):
+    if not docs:
+        return "*No documents.*"
+    lines = ["| ID | Filename | Status | Error |", "|---|---|---|---|"]
+    for d in docs:
+        err = (d.get("error_reason") or "").replace("|", "\\|")
+        lines.append(f"| `{d['id'][:42]}` | {d['filename']} | {d['status']} | {err} |")
+    return "\n".join(lines)
 
 def refresh_documents(token, chatbot_id):
-    return gr.update(value=_doc_rows(token, chatbot_id))
+    if not chatbot_id:
+        return gr.update(value="")
+    docs = run(get_client(token).list_documents(chatbot_id))
+    return gr.update(value=_docs_to_markdown(docs))
 
 def on_chatbot_select_docs(token, name, choices):
     chatbot_id = choices.get(name, "") if name else ""
@@ -91,17 +104,15 @@ def refresh_eval(token, chatbot_name, chatbot_choices, failures_only):
         client.list_conversations(chatbot_id, no_answer_only=failures_only),
     )
 
-    rows = [
-        [
-            c["id"][:8] + "…",
-            c.get("chatbot_id", "")[:8] + "…",
-            (c.get("first_question") or "")[:80],
-            "❌" if c.get("has_failure") else "✓",
-            c["created_at"][:19],
-        ]
-        for c in convs
-    ]
-    full_ids = [c["id"] for c in convs]
+    choices = []
+    for c in convs:
+        label = (
+            f"{'❌' if c.get('has_failure') else '✓'}  "
+            f"{c['id'][:8]}…  |  "
+            f"{(c.get('first_question') or '')[:60]}  |  "
+            f"{c['created_at'][:19]}"
+        )
+        choices.append((label, c["id"]))
 
     no_answer_pct = round(summary.get("no_answer_rate", 0) * 100, 1)
     avg_sim = summary.get("avg_top_similarity")
@@ -114,19 +125,36 @@ def refresh_eval(token, chatbot_name, chatbot_choices, failures_only):
         no_answer_pct,
         avg_sim if avg_sim is not None else 0,
         satisfaction_pct,
-        gr.update(value=rows),
-        full_ids,
+        gr.update(choices=choices, value=None),
     )
 
 
 def inspect_conversation(token, conv_id):
-    if not conv_id.strip():
-        raise gr.Error("Enter a conversation ID first.")
+    if not conv_id or not conv_id.strip():
+        raise gr.Error("Select or enter a conversation ID first.")
     messages = run(get_client(token).get_conversation_messages(conv_id.strip()))
     return messages
 
 
 # ─── Tab: Chat ───────────────────────────────────────────────────────────────
+
+def _sources_to_markdown(sources):
+    if not sources:
+        return ""
+    lines = [
+        "**Sources used**",
+        "",
+        "| # | Document | Match | Similarity | Snippet |",
+        "|---|----------|-------|------------|---------|",
+    ]
+    for s in sources:
+        doc = str(s["document_name"]).replace("|", "\\|")
+        match = s.get("match_type", "semantic")
+        sim = f"{s['similarity']:.3f}"
+        snippet = s["snippet"][:120].replace("|", "\\|").replace("\n", " ")
+        lines.append(f"| {s['index']} | {doc} | {match} | {sim} | {snippet} |")
+    return "\n".join(lines)
+
 
 def send_feedback(token, message_id, rating):
     if not message_id:
@@ -135,7 +163,7 @@ def send_feedback(token, message_id, rating):
     return "Thanks for your feedback!" if rating == 1 else "Got it — we'll improve."
 
 
-def chat_handler(message, history, token, chatbot_id, session_id_state):
+async def chat_handler(message, history, token, chatbot_id, session_id_state):
     if not chatbot_id:
         yield (
             history + [
@@ -143,10 +171,12 @@ def chat_handler(message, history, token, chatbot_id, session_id_state):
                 {"role": "assistant", "content": "Select a chatbot first."},
             ],
             session_id_state,
-            gr.update(visible=False),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
             "",
             gr.update(visible=False),
-            gr.update(visible=False),
+            "",
         )
         return
     session_id = session_id_state or str(uuid.uuid4())
@@ -167,37 +197,47 @@ def chat_handler(message, history, token, chatbot_id, session_id_state):
     def capture_done(message_id):
         message_id_captured.append(message_id)
 
+    import time as _time
+    t0 = _time.monotonic()
+    print(f"[chat] start ts={t0:.3f}", flush=True)
     partial = ""
-    for chunk in get_client(token).chat_stream(
+    chunk_count = 0
+    async for chunk in get_client(token).chat_stream(
         chatbot_id, message, session_id,
         on_sources=capture_sources,
         on_meta=capture_meta,
         on_done=capture_done,
     ):
         partial = chunk
+        chunk_count += 1
         yield (
             accumulated + [{"role": "assistant", "content": partial}],
             session_id,
-            gr.update(visible=False),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
             "",
             gr.update(visible=False),
-            gr.update(visible=False),
+            "",
         )
+    t1 = _time.monotonic()
+    print(f"[chat] stream done after {t1 - t0:.3f}s, chunks={chunk_count}", flush=True)
 
-    rows = [
-        [s["index"], s["document_name"], s.get("match_type", "semantic"), s["similarity"], s["snippet"]]
-        for s in sources_captured
-    ]
+    sources_md = _sources_to_markdown(sources_captured)
     rq = retrieval_query_captured[0] if retrieval_query_captured else ""
     message_id = message_id_captured[0] if message_id_captured else ""
     yield (
         accumulated + [{"role": "assistant", "content": partial or "..."}],
         session_id,
-        gr.update(value=rows, visible=bool(rows)),
+        gr.update(value=sources_md),
         message_id,
-        gr.update(visible=bool(message_id)),
         gr.update(value=f"*Searched for: {rq}*" if rq else "", visible=bool(rq)),
+        gr.skip(),
+        gr.update(visible=True),
+        "",
     )
+    t2 = _time.monotonic()
+    print(f"[chat] handler returning total={t2 - t0:.3f}s", flush=True)
 
 # ─── Layout ──────────────────────────────────────────────────────────────────
 
@@ -212,7 +252,7 @@ with gr.Blocks(title="KB Chatbot") as demo:
     with gr.Tab("Chatbots"):
         with gr.Row():
             refresh_btn = gr.Button("Refresh", variant="secondary")
-        chatbot_table = gr.Dataframe(headers=["ID", "Name", "Created"])
+        chatbot_table = gr.Markdown(value="")
         gr.Markdown("### Create New Chatbot")
         with gr.Row():
             new_name = gr.Textbox(label="Name", placeholder="My Chatbot")
@@ -224,7 +264,7 @@ with gr.Blocks(title="KB Chatbot") as demo:
         with gr.Row():
             chatbot_select_docs = gr.Dropdown(label="Select Chatbot", choices=[])
             refresh_docs_btn = gr.Button("Refresh Documents")
-        docs_table = gr.Dataframe(headers=["ID", "Filename", "Status", "Error"])
+        docs_table = gr.Markdown(value="")
         gr.Markdown("### Upload Document")
         file_upload = gr.File(
             label="Upload File",
@@ -236,6 +276,10 @@ with gr.Blocks(title="KB Chatbot") as demo:
     with gr.Tab("Chat"):
         chatbot_select_chat = gr.Dropdown(label="Select Chatbot", choices=[])
         chat_interface = gr.Chatbot(label="Conversation", height=450)
+        with gr.Row(visible=False) as feedback_row:
+            thumbs_up_btn = gr.Button("👍", variant="secondary", scale=1)
+            thumbs_down_btn = gr.Button("👎", variant="secondary", scale=1)
+            feedback_status = gr.Markdown("")
         with gr.Row():
             msg_input = gr.Textbox(
                 label="Message",
@@ -243,16 +287,8 @@ with gr.Blocks(title="KB Chatbot") as demo:
                 scale=4,
             )
             send_btn = gr.Button("Send", variant="primary", scale=1)
-        sources_display = gr.Dataframe(
-            headers=["#", "Document", "Match", "Similarity", "Snippet"],
-            label="Sources used",
-            visible=False,
-        )
+        sources_display = gr.Markdown(value="")
         retrieval_query_display = gr.Markdown(value="", visible=False)
-        with gr.Row(visible=False) as feedback_row:
-            thumbs_up_btn = gr.Button("👍", variant="secondary", scale=1)
-            thumbs_down_btn = gr.Button("👎", variant="secondary", scale=1)
-            feedback_status = gr.Markdown("")
 
     with gr.Tab("Evaluation"):
         gr.Markdown("## Chatbot Quality Dashboard")
@@ -270,16 +306,10 @@ with gr.Blocks(title="KB Chatbot") as demo:
 
         gr.Markdown("### Conversations")
         show_failures_only = gr.Checkbox(label="Show failures only (no-answer responses) — then press Refresh", value=False)
-        conv_table = gr.Dataframe(
-            headers=["ID", "Chatbot", "First question", "Has failure", "Started"],
-            interactive=False,
-        )
-        full_conv_ids_state = gr.State([])
-        copy_conv_id_btn = gr.Button("Copy selected ID", variant="secondary")
+        conv_table = gr.Dropdown(label="Select conversation", choices=[], interactive=True)
 
         gr.Markdown("### Conversation detail")
-        gr.Markdown("*Click a row above then press Inspect.*")
-        conv_id_input = gr.Textbox(label="Conversation ID", placeholder="click a row or paste")
+        conv_id_input = gr.Textbox(label="Conversation ID", placeholder="select above or paste")
         inspect_btn = gr.Button("Inspect", variant="secondary")
         message_detail = gr.JSON(label="Messages + sources")
 
@@ -324,17 +354,28 @@ with gr.Blocks(title="KB Chatbot") as demo:
         outputs=[upload_status],
     )
 
+    _chat_outputs = [
+        chat_interface,
+        session_id_state,
+        sources_display,
+        last_message_id_state,
+        retrieval_query_display,
+        msg_input,
+        feedback_row,
+        feedback_status,
+    ]
+
     send_btn.click(
         chat_handler,
         inputs=[msg_input, chat_interface, token_input, chatbot_id_state, session_id_state],
-        outputs=[chat_interface, session_id_state, sources_display, last_message_id_state, feedback_row, retrieval_query_display],
-    ).then(lambda: "", outputs=[msg_input])
+        outputs=_chat_outputs,
+    )
 
     msg_input.submit(
         chat_handler,
         inputs=[msg_input, chat_interface, token_input, chatbot_id_state, session_id_state],
-        outputs=[chat_interface, session_id_state, sources_display, last_message_id_state, feedback_row, retrieval_query_display],
-    ).then(lambda: "", outputs=[msg_input])
+        outputs=_chat_outputs,
+    )
 
     thumbs_up_btn.click(
         lambda token, mid: send_feedback(token, mid, 1),
@@ -350,23 +391,14 @@ with gr.Blocks(title="KB Chatbot") as demo:
     refresh_eval_btn.click(
         refresh_eval,
         inputs=[token_input, eval_chatbot_select, chatbot_choices_state, show_failures_only],
-        outputs=[stat_total_convs, stat_total_msgs, stat_no_answer, stat_avg_sim, stat_satisfaction, conv_table, full_conv_ids_state],
+        outputs=[stat_total_convs, stat_total_msgs, stat_no_answer, stat_avg_sim, stat_satisfaction, conv_table],
     )
 
-    def on_conv_row_select(evt: gr.SelectData, full_ids):
-        row = evt.index[0]
-        return full_ids[row] if full_ids and row < len(full_ids) else ""
-
-    conv_table.select(
-        on_conv_row_select,
-        inputs=[full_conv_ids_state],
+    conv_table.change(
+        lambda val: val if val else "",
+        inputs=[conv_table],
         outputs=[conv_id_input],
-    )
-
-    copy_conv_id_btn.click(
-        None,
-        inputs=[conv_id_input],
-        js="(val) => { if (val) navigator.clipboard.writeText(val); }",
+        queue=False,
     )
 
     inspect_btn.click(

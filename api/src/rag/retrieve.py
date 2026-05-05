@@ -20,7 +20,7 @@ async def retrieve_context(
     chatbot_id: str,
     query: str,
     top_k: int = 5,
-    min_similarity: float = 0.75,
+    min_similarity: float = 0.4,
 ) -> list[RetrievedChunk]:
     """
     Hybrid BM25 + vector retrieval merged with Reciprocal Rank Fusion.
