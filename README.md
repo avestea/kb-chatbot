@@ -51,9 +51,9 @@ The document starts in `pending` status. The background worker automatically dow
 
 Go to the **Chat** tab → select your chatbot → type a question → press Enter.
 
-The response streams token-by-token. After it completes:
-- A **Sources** table shows which document chunks were retrieved, with similarity scores and text snippets.
-- **👍 / 👎** buttons let you rate the answer quality.
+The response streams token-by-token. After streaming completes:
+- **👍 / 👎** buttons appear directly below the answer — they are hidden during streaming and reset on each new message.
+- A **Sources** table (rendered as markdown) shows which document chunks were retrieved, with similarity scores and text snippets.
 - Follow-up questions are automatically rewritten into self-contained queries before retrieval (you see the original question; the rewrite is invisible).
 
 ### Step 4 — Evaluate
@@ -66,7 +66,7 @@ The dashboard shows:
 - Average retrieval similarity
 - Satisfaction rate from thumbs up/down feedback
 
-Toggle **Show failures only** to filter to conversations where retrieval found nothing. Paste a conversation ID and click **Inspect** to see the full message thread with per-message ratings.
+Toggle **Show failures only** to filter to conversations where retrieval found nothing. Select a conversation from the dropdown (each entry shows status, short ID, first question, and timestamp) or paste a UUID directly into the **Conversation ID** field, then click **Inspect** to see the full message thread with per-message ratings.
 
 ## Environment Variables
 

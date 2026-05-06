@@ -17,7 +17,8 @@ KB Chatbot is a multi-tenant SaaS RAG (Retrieval-Augmented Generation) system. O
 11. [Multi-Tenancy](#multi-tenancy)
 12. [Authentication](#authentication)
 13. [File Storage](#file-storage)
-14. [Key Source Files](#key-source-files)
+14. [Gradio UI](#gradio-ui)
+15. [Key Source Files](#key-source-files)
 
 ---
 
@@ -632,6 +633,26 @@ When a document or chatbot is soft-deleted, the S3 object is **not** deleted —
 
 ---
 
+## Gradio UI
+
+The web UI (`web/app.py`) is a Gradio 6 Blocks app with four tabs. It communicates exclusively with the FastAPI backend via `web/api_client.py`.
+
+### Component choices
+
+All data tables use `gr.Markdown` (rendered markdown tables) rather than `gr.Dataframe`. Gradio 6's `gr.Dataframe` uses AG Grid internally; a bug in that version causes infinite recursion in AG Grid's `groupedColumnMode` getter when any component on the page is updated during or after an SSE stream — freezing the browser tab for 30–60 seconds. Markdown tables have no such issue.
+
+The Evaluation tab's conversation list uses `gr.Dropdown` instead of a table: each entry encodes status, short ID, first question, and timestamp. Selecting an entry populates the Conversation ID field directly.
+
+### Async model
+
+`app.py` runs a single persistent background asyncio event loop (`_bg_loop`) in a daemon thread. All synchronous Gradio handlers submit coroutines to this loop via `asyncio.run_coroutine_threadsafe`. The `chat_handler` is itself an `async def` generator; Gradio runs it directly on its own event loop.
+
+### Streaming and feedback button lifecycle
+
+The `chat_handler` async generator yields on every SSE token. During streaming the 👍/👎 feedback row is hidden (`gr.update(visible=False)`). On the final yield — after all SSE events are consumed — the feedback row becomes visible and the sources markdown table is populated.
+
+---
+
 ## Key Source Files
 
 | File | Purpose |
@@ -660,7 +681,7 @@ When a document or chatbot is soft-deleted, the S3 object is **not** deleted —
 | `api/src/worker/chunker.py` | `chunk_text()` token-aware splitter |
 | `api/src/worker/parsers/` | PDF, DOCX, HTML, TXT text extractors |
 | `api/alembic/versions/` | 4 migration files (init, source_chunks, tsvector, feedback) |
-| `web/app.py` | Gradio 4-tab UI |
+| `web/app.py` | Gradio 4-tab UI (Chatbots, Documents, Chat, Evaluation) |
 | `web/api_client.py` | Typed httpx wrapper around the REST API |
 | `docker-compose.yml` | All 7 services |
 | `.env.example` | Environment variable template |
