@@ -5,11 +5,16 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from src.lib.log import log
 from src.lib.errors import ApiError
-from src.db.base import engine
+from src.db.base import engine, async_session
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     log.info("api starting")
+
+    # Seed cost rates on startup
+    async with async_session() as db:
+        from src.lib.observability import seed_cost_rates
+        await seed_cost_rates(db)
 
     try:
         yield
@@ -52,6 +57,7 @@ from src.routes.documents import router as documents_router
 from src.routes.chat import router as chat_router
 from src.routes.analytics import router as analytics_router
 from src.routes.feedback import router as feedback_router
+from src.routes.observability import router as observability_router
 
 app.include_router(webhook_router)
 app.include_router(chatbots_router, prefix="/api/v1")
@@ -59,6 +65,7 @@ app.include_router(documents_router, prefix="/api/v1")
 app.include_router(chat_router, prefix="/api/v1")
 app.include_router(analytics_router, prefix="/api/v1")
 app.include_router(feedback_router, prefix="/api/v1")
+app.include_router(observability_router, prefix="/api/v1")
 
 
 @app.get("/health")

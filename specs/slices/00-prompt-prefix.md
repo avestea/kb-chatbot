@@ -390,6 +390,12 @@ Slice 0  (Docker)
                                        └── Slice 7  (retrieval)
                                              └── Slice 8  (chat endpoint)
                                                    └── Slice 9  (Gradio UI)
+                                                         ├── Slice 10 (explainability)
+                                                         │     └── Slice 11 (evaluation dashboard)
+                                                         │           └── Slice 14 (feedback)
+                                                         ├── Slice 12 (hybrid search)
+                                                         ├── Slice 13 (query rewriting)
+                                                         └── Slice 15 (observability)
 ```
 
 **MVP is Slices 0–9.** All in Python. No Node.js required.

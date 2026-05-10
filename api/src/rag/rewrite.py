@@ -1,7 +1,9 @@
 from anthropic import AsyncAnthropic
+from tiktoken import get_encoding
 from src.config.env import settings
 
 _client = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+_encoding = get_encoding("cl100k_base")
 
 REWRITE_SYSTEM = (
     "You are a search query optimizer. "
@@ -12,7 +14,11 @@ REWRITE_SYSTEM = (
 )
 
 
-async def rewrite_query(message: str, history: list[dict]) -> str:
+async def rewrite_query(
+    message: str,
+    history: list[dict],
+    request_context=None,
+) -> str:
     """
     Rewrites `message` into a self-contained retrieval query using prior turns.
     Returns the original message unchanged if history is empty or rewriting fails.
@@ -44,3 +50,16 @@ async def rewrite_query(message: str, history: list[dict]) -> str:
     except Exception:
         # Rewriting is best-effort — fall back to original on any error
         return message
+
+
+def count_rewrite_tokens(message: str, history: list[dict]) -> int:
+    """Count input tokens for the rewrite call."""
+    recent = history[-6:]
+    transcript_lines = [f"{m['role'].upper()}: {m['content']}" for m in recent]
+    transcript = "\n".join(transcript_lines)
+    prompt = (
+        f"Conversation so far:\n{transcript}\n\n"
+        f"New message: {message}\n\n"
+        "Rewritten query:"
+    )
+    return len(_encoding.encode(prompt))

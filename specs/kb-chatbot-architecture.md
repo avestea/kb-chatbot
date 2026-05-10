@@ -111,12 +111,15 @@ class Message(BaseModel):
 | 12 | Hybrid Search | BM25 + vector search merged with Reciprocal Rank Fusion |
 | 13 | Query Rewriting | Rewrite follow-up questions into self-contained retrieval queries |
 | 14 | Feedback | Thumbs up/down per answer; satisfaction rate in evaluation dashboard |
+| 15 | Observability | Token & cost tracking per request; spend dashboard |
 
 **Minimum viable product:** Slices 0–9. After these, you have a working RAG chatbot with a Python UI.
 
 **Recommended next layer:** Slices 10–11 add observability into answer quality with no new infrastructure.
 
 **Quality layer:** Slices 12–14 improve retrieval accuracy and collect user signal.
+
+**Production readiness:** Slice 15 tracks cost and latency per request — essential before any real traffic.
 
 ---
 
@@ -137,7 +140,8 @@ Slice 0  (Docker)
                                                          │     └── Slice 11 (evaluation dashboard) — needs Slice 10
                                                          │           └── Slice 14 (feedback) — extends Slice 11
                                                          ├── Slice 12 (hybrid search) — extends Slice 7
-                                                         └── Slice 13 (query rewriting) — extends Slice 8
+                                                         ├── Slice 13 (query rewriting) — extends Slice 8
+                                                         └── Slice 15 (observability) — extends Slices 6, 7, 8
 ```
 
 ---

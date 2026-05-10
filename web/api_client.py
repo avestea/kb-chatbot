@@ -75,6 +75,55 @@ class APIClient:
         r = await self._http.post("/api/v1/feedback", json={"message_id": message_id, "rating": rating})
         r.raise_for_status()
 
+    async def get_observability_summary(
+        self, chatbot_id: str | None = None, days: int = 30
+    ) -> dict:
+        params = {"days": days}
+        if chatbot_id:
+            params["chatbot_id"] = chatbot_id
+        r = await self._http.get("/api/v1/observability/summary", params=params)
+        r.raise_for_status()
+        return r.json()
+
+    async def get_cost_by_chatbot(self, days: int = 30) -> list[dict]:
+        r = await self._http.get("/api/v1/observability/breakdown/by-chatbot", params={"days": days})
+        r.raise_for_status()
+        return r.json()
+
+    async def get_cost_by_phase(self, chatbot_id: str | None = None, days: int = 30) -> list[dict]:
+        params = {"days": days}
+        if chatbot_id:
+            params["chatbot_id"] = chatbot_id
+        r = await self._http.get("/api/v1/observability/breakdown/by-phase", params=params)
+        r.raise_for_status()
+        return r.json()
+
+    async def get_cost_by_day(self, chatbot_id: str | None = None, days: int = 30) -> list[dict]:
+        params = {"days": days}
+        if chatbot_id:
+            params["chatbot_id"] = chatbot_id
+        r = await self._http.get("/api/v1/observability/breakdown/by-day", params=params)
+        r.raise_for_status()
+        return r.json()
+
+    async def get_observability_logs(
+        self,
+        chatbot_id: str | None = None,
+        phase: str | None = None,
+        provider: str | None = None,
+        limit: int = 50,
+    ) -> dict:
+        params = {"limit": limit}
+        if chatbot_id:
+            params["chatbot_id"] = chatbot_id
+        if phase:
+            params["phase"] = phase
+        if provider:
+            params["provider"] = provider
+        r = await self._http.get("/api/v1/observability/logs", params=params)
+        r.raise_for_status()
+        return r.json()
+
     async def chat_stream(
         self,
         chatbot_id: str,

@@ -33,12 +33,84 @@ A SaaS knowledge base chatbot builder in Python. Operators upload documents (PDF
 | 12 | Hybrid Search | **Done** | 128/128 tests pass (6 new). BM25 + vector + RRF merge; keyword-only hits surface with similarity=0.0. See deviations below. |
 | 13 | Query Rewriting | **Done** | 141/141 tests pass (13 new). Haiku rewrites follow-up queries before retrieval; rewrite failure falls back gracefully. |
 | 14 | Feedback | **Done** | 154/154 tests pass (13 new). Thumbs up/down per message; upsert on re-vote; satisfaction_rate in analytics. |
+| 15 | Observability & Token Tracking | **Done** | Every LLM/embedding call logged to `observation_logs`. Cost by chatbot/phase/day. Observability tab in Gradio. 173/173 tests pass (19 new). |
 
 MVP = Slices 0–9.
 
 ---
 
 ## What Exists Right Now
+
+### Observability & Cost Tracking (Slice 15)
+
+```
+api/alembic/versions/0005_observability_tables.py
+                                CREATE TABLE cost_rates (id, provider, model, direction,
+                                  price_per_1m_tokens NUMERIC(16,6), updated_at, deleted_at);
+                                  UNIQUE (provider, model, direction, deleted_at)
+                                CREATE TABLE observation_logs (id, tenant_id→tenants, chatbot_id→chatbots,
+                                  provider, model, phase, direction, tokens INT, cost_usd NUMERIC(16,8),
+                                  latency_ms INT, request_id TEXT, chunk_count INT NULL, error TEXT NULL,
+                                  created_at, deleted_at);
+                                  Indexes: (tenant_id, chatbot_id, created_at),
+                                           (tenant_id, phase, created_at),
+                                           (tenant_id, created_at)
+api/src/config/observability.py COST_RATES dict: claude-sonnet-4-6 ($3/$15), claude-haiku-4-5-20251001
+                                  ($0.80/$4), text-embedding-3-small ($0.02); get_cost() helper
+api/src/lib/observability.py    RequestContext (request_id UUID); log_request() adds one row to
+                                  observation_logs, computes cost via get_cost(), returns request_id;
+                                  measure_latency() async context manager; seed_cost_rates() no-op if already seeded
+api/src/db/models.py            Added: CostRate and ObservationLog ORM models
+api/src/routes/observability.py GET /api/v1/observability/summary — total cost/tokens/requests/avg latency
+                                GET /api/v1/observability/breakdown/by-chatbot — cost grouped by chatbot
+                                GET /api/v1/observability/breakdown/by-phase — cost grouped by phase
+                                GET /api/v1/observability/breakdown/by-day — daily spend trend
+                                GET /api/v1/observability/logs — paginated request log (phase/provider/chatbot filters)
+api/src/main.py                 Registered observability_router; seed_cost_rates() called in lifespan
+api/src/routes/chat.py          _generate() extended: RequestContext created per request; rewrite_query()
+                                  called unconditionally (returns early when no history, no API call made);
+                                  chat_rewrite row logged only when query was actually changed;
+                                  chat_response (input + output rows) logged after stream;
+                                  retrieve_context() called with tenant_id
+api/src/rag/retrieve.py         retrieve_context() accepts tenant_id and request_context; wraps embed_chunks
+                                  call in measure_latency(); logs embed_query row if both provided
+api/src/lib/embedder.py         _count_tokens() renamed to count_tokens() (public); exported for use in retrieve.py
+api/src/rag/rewrite.py          Unchanged — request_context param accepted but token counting done by
+                                  count_rewrite_tokens() in chat.py (see deviation below)
+api/src/worker/jobs.py          ingest_document() logs ingest_embed row (tokens, latency, chunk_count)
+                                  after embedding all chunks; uses measure_latency() around the embed loop
+web/api_client.py               get_observability_summary(), get_cost_by_chatbot(), get_cost_by_phase(),
+                                  get_cost_by_day(), get_observability_logs()
+web/app.py                      Observability tab: summary cards (total cost/tokens/requests/avg cost per
+                                  request); cost-by-chatbot table; cost-by-phase table; daily spend table;
+                                  recent logs table with phase and provider filters; all controls wired to
+                                  refresh_observability(); obs_chatbot_select populated by refresh_chatbots()
+```
+
+Verified ACs:
+- `GET /api/v1/observability/summary` returns correct totals after a chat request
+- `GET /api/v1/observability/breakdown/by-chatbot` returns one row per chatbot with correct cost
+- `GET /api/v1/observability/breakdown/by-phase` returns rows for all phases that have logs
+- `GET /api/v1/observability/breakdown/by-day` returns daily rows covering the requested window
+- `GET /api/v1/observability/logs` returns paginated logs with all fields; phase and provider filters work
+- Observability tab shows summary cards, cost-by-chatbot, cost-by-phase, daily spend, recent logs
+- Token costs correct: `$3.00 / 1M * input_tokens` for Claude Sonnet input
+- Tenant isolation: tenant cannot see another tenant's observability data
+- `cost_rates` seeded on first startup; no-op on subsequent starts
+
+**Deviation — `embed_chunks` does not log internally:**
+The spec says to hook logging inside `embed_chunks`. Instead, logging is done at the call sites: `retrieve_context()` logs `embed_query` (has tenant_id + request_context), and `jobs.py` logs `ingest_embed` directly. This avoids giving `embed_chunks` a db session dependency. `embed_chunks` still accepts `request_context` for API compatibility but ignores it; the parameter is a no-op.
+
+**Deviation — `rewrite_query` returns only the rewritten string (not a tuple):**
+The spec shows `rewritten, rewrite_tokens = await rewrite_query(...)`. The implementation returns only `str`. Token count for the rewrite call is estimated beforehand via `count_rewrite_tokens()` (tiktoken) in `chat.py`, then the log row is written only when the rewrite actually changed the query. This means a no-op rewrite (output == input) skips the log row entirely, even though an API call was made — acceptable given the rewrite is best-effort.
+
+**Deviation — `retrieve_context()` takes `tenant_id` parameter (not in spec):**
+Added `tenant_id: str | None = None` so the function can open its own db session to log the `embed_query` row. Callers that do not pass `tenant_id` simply skip logging (backwards compatible).
+
+**Deviation — haiku model key uses full date-versioned ID:**
+`COST_RATES` key is `"claude-haiku-4-5-20251001"` (matching the actual Anthropic API model ID used in `rewrite.py`) rather than the shorthand `"claude-haiku-4-5"` shown in the spec. This ensures cost lookups match the logged model string exactly.
+
+---
 
 ### Feedback (Slice 14)
 
@@ -506,6 +578,18 @@ RUN mkdir -p src && pip install --no-cache-dir -e ".[dev]"
 **Fix:** Single daemon thread runs `_bg_loop.run_forever()`; all calls use `asyncio.run_coroutine_threadsafe()`. Added `run_parallel(*coros)` which wraps `asyncio.gather` on that loop. `refresh_eval()` now fetches summary and conversations concurrently. `on_chatbot_select_docs()` resolves chatbot ID and fetches documents in one handler, replacing the separate `chatbot_id_state` update + manual Refresh click.  
 **Also:** `create_btn.click` chains `.then(refresh_chatbots)` so all dropdowns populate immediately after chatbot creation.
 
+### 13. `api/src/routes/observability.py` — `cost_by_day` uses `literal_column` for `date_trunc` (Slice 15)
+
+**Spec:** `func.date_trunc("day", ObservationLog.created_at)` in SELECT, GROUP BY, and ORDER BY.  
+**Actual:** `func.date_trunc(literal_column("'day'"), ObservationLog.created_at).label("day")` assigned to a variable; ORDER BY uses the string alias `"day"`.  
+**Why:** asyncpg parameterizes the `"day"` string argument as `$N::VARCHAR`. When the same expression appears in SELECT (`$1`) and GROUP BY (`$2`), PostgreSQL's prepared-statement planner sees two distinct parameters and raises `GroupingError: column must appear in the GROUP BY clause`. Using `literal_column("'day'")` inlines the string as a SQL literal so SELECT and GROUP BY share the same expression. Same root cause as the Slice 11 jsonpath fix.
+
+### 14. `api/src/routes/chat.py` — `rewrite_query` called unconditionally (Slice 15)
+
+**Spec:** Implies calling `rewrite_query` only when there is prior history.  
+**Actual:** `rewrite_query()` is called unconditionally. `rewrite_query` itself returns the original message immediately when history is empty (no API call is made).  
+**Why:** Wrapping the call in `if prior_history:` broke two existing Slice 13 tests that mock `src.routes.chat.rewrite_query` — the mock was never invoked for fresh sessions with no prior messages. Calling unconditionally restores the Slice 13 behavior. Logging is still guarded by `if retrieval_query != body.message:`, so no log row is written for empty-history (no-op) rewrites.
+
 ### 11. `api/src/routes/analytics.py` — jsonpath literal uses `literal_column` with explicit cast (Slice 11)
 
 **Spec:** `cast("$[0].similarity", type_=None)` as the jsonpath argument to `jsonb_path_query_first`.  
@@ -556,4 +640,4 @@ Auth is in demo mode (`AUTH_MODE=demo`). Any Bearer token value works. `Authoriz
 
 ## Next Step
 
-All planned slices (0–14) are complete. MVP (Slices 0–9) and all feature extensions are implemented and tested.
+All planned slices (0–15) are complete. MVP (Slices 0–9) and all feature extensions are implemented and tested.

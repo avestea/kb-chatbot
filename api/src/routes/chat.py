@@ -9,8 +9,9 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from src.db.base import async_session
 from src.db.models import Chatbot, Conversation, Message
 from src.lib.llm import stream_completion, ChatTurn
+from src.lib.observability import RequestContext, log_request, measure_latency
 from src.rag.retrieve import retrieve_context
-from src.rag.rewrite import rewrite_query
+from src.rag.rewrite import rewrite_query, count_rewrite_tokens
 from src.rag.prompt import build_system_prompt, PROMPT_VERSION
 from src.schemas.chat import ChatRequest
 from src.lib.log import log
@@ -37,6 +38,7 @@ async def _generate(chatbot_id: str, body: ChatRequest, request: Request):
 
     cancel = asyncio.Event()
     heartbeat_task = asyncio.create_task(_heartbeat())
+    request_ctx = RequestContext.new()
 
     try:
         async with async_session() as db:
@@ -76,11 +78,41 @@ async def _generate(chatbot_id: str, body: ChatRequest, request: Request):
             db.add(user_msg)
             await db.commit()
 
+        # Query rewriting (turns >= 2)
+        rewrite_ctx = RequestContext.new()
+        rewrite_tokens = count_rewrite_tokens(body.message, prior_history) if prior_history else 0
         try:
-            retrieval_query = await rewrite_query(body.message, prior_history)
+            async with measure_latency() as lat:
+                retrieval_query = await rewrite_query(
+                    body.message, prior_history,
+                    request_context=rewrite_ctx,
+                )
+            rewrite_latency = lat()
         except Exception:
             retrieval_query = body.message
-        chunks = await retrieve_context(chatbot_id=chatbot_id, query=retrieval_query)
+            rewrite_latency = 0
+
+        if retrieval_query != body.message:
+            async with async_session() as log_db:
+                await log_request(
+                    log_db,
+                    tenant_id=str(chatbot.tenant_id),
+                    chatbot_id=str(chatbot.id),
+                    provider="anthropic",
+                    model="claude-haiku-4-5-20251001",
+                    phase="chat_rewrite",
+                    direction="input",
+                    tokens=rewrite_tokens,
+                    latency_ms=rewrite_latency,
+                    request_context=rewrite_ctx,
+                )
+                await log_db.commit()
+
+        chunks = await retrieve_context(
+            chatbot_id=chatbot_id, query=retrieval_query,
+            request_context=request_ctx,
+            tenant_id=str(chatbot.tenant_id),
+        )
 
         sources_payload = [
             {
@@ -112,24 +144,28 @@ async def _generate(chatbot_id: str, body: ChatRequest, request: Request):
         input_tokens = 0
         output_tokens = 0
 
-        async for event in stream_completion(
-            system_prompt=system_prompt,
-            messages=messages,
-            max_tokens=1024,
-            temperature=0.2,
-            cancel=cancel,
-        ):
-            if await request.is_disconnected():
-                cancel.set()
-                break
-            if event.type == "token":
-                assistant_text += event.text
-                yield sse("token", {"text": event.text})
-            elif event.type == "usage":
-                input_tokens = event.input_tokens
-                output_tokens = event.output_tokens
+        async with measure_latency() as lat:
+            async for event in stream_completion(
+                system_prompt=system_prompt,
+                messages=messages,
+                max_tokens=1024,
+                temperature=0.2,
+                cancel=cancel,
+            ):
+                if await request.is_disconnected():
+                    cancel.set()
+                    break
+                if event.type == "token":
+                    assistant_text += event.text
+                    yield sse("token", {"text": event.text})
+                elif event.type == "usage":
+                    input_tokens = event.input_tokens
+                    output_tokens = event.output_tokens
+            chat_latency = lat()
 
         no_answer = "I don't have information about that" in assistant_text
+
+        # Persist assistant message
         async with async_session() as db:
             assistant_msg = Message(
                 conversation_id=conv_id,
@@ -144,6 +180,34 @@ async def _generate(chatbot_id: str, body: ChatRequest, request: Request):
             db.add(assistant_msg)
             await db.commit()
             await db.refresh(assistant_msg)
+
+        # Log the chat_response call (both directions in one transaction)
+        async with async_session() as log_db:
+            await log_request(
+                log_db,
+                tenant_id=str(chatbot.tenant_id),
+                chatbot_id=str(chatbot.id),
+                provider="anthropic",
+                model="claude-sonnet-4-6",
+                phase="chat_response",
+                direction="input",
+                tokens=input_tokens,
+                latency_ms=chat_latency,
+                request_context=request_ctx,
+            )
+            await log_request(
+                log_db,
+                tenant_id=str(chatbot.tenant_id),
+                chatbot_id=str(chatbot.id),
+                provider="anthropic",
+                model="claude-sonnet-4-6",
+                phase="chat_response",
+                direction="output",
+                tokens=output_tokens,
+                latency_ms=chat_latency,
+                request_context=request_ctx,
+            )
+            await log_db.commit()
 
         yield sse("done", {"message_id": str(assistant_msg.id)})
 

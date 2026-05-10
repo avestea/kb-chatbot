@@ -1,7 +1,8 @@
 from dataclasses import dataclass
 from sqlalchemy import text
 from src.db.base import async_session
-from src.lib.embedder import embed_chunks, EMBEDDING_MODEL
+from src.lib.embedder import embed_chunks, count_tokens, EMBEDDING_MODEL
+from src.lib.observability import log_request, measure_latency
 
 RRF_K = 60  # standard constant; higher = smoother ranking, less sensitive to top positions
 
@@ -21,13 +22,33 @@ async def retrieve_context(
     query: str,
     top_k: int = 5,
     min_similarity: float = 0.4,
+    request_context=None,
+    tenant_id: str | None = None,
 ) -> list[RetrievedChunk]:
     """
     Hybrid BM25 + vector retrieval merged with Reciprocal Rank Fusion.
     Keyword-only hits (no vector match above threshold) pass through with similarity=0.0.
     Returns [] when nothing passes the threshold or FTS matches.
     """
-    [query_embedding] = await embed_chunks([query])
+    async with measure_latency() as lat:
+        [query_embedding] = await embed_chunks([query])
+    embed_latency = lat()
+
+    if request_context is not None and tenant_id is not None:
+        async with async_session() as log_db:
+            await log_request(
+                log_db,
+                tenant_id=tenant_id,
+                chatbot_id=chatbot_id,
+                provider="openai",
+                model="text-embedding-3-small",
+                phase="embed_query",
+                direction="input",
+                tokens=count_tokens([query]),
+                latency_ms=embed_latency,
+                request_context=request_context,
+            )
+            await log_db.commit()
     embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
 
     vector_sql = text("""

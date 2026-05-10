@@ -1,12 +1,13 @@
 import uuid
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any, Optional, List
 from sqlalchemy import (
     String, Text, Integer, Boolean, DateTime, Index,
     UniqueConstraint, ForeignKey, func, Computed
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
-from sqlalchemy.dialects.postgresql import UUID, JSONB, TSVECTOR
+from sqlalchemy.dialects.postgresql import UUID, JSONB, TSVECTOR, NUMERIC as postgresql_NUMERIC
 from pgvector.sqlalchemy import Vector
 
 
@@ -151,3 +152,59 @@ class Feedback(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+
+
+class CostRate(Base):
+    """Price table mapping model + direction → price per 1M tokens."""
+
+    __tablename__ = "cost_rates"
+    __table_args__ = (
+        UniqueConstraint("provider", "model", "direction", "deleted_at", name="uq_cost_rates"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    provider: Mapped[str] = mapped_column(Text, nullable=False)
+    model: Mapped[str] = mapped_column(Text, nullable=False)
+    direction: Mapped[str] = mapped_column(Text, nullable=False)  # 'input' | 'output'
+    price_per_1m_tokens: Mapped[Decimal] = mapped_column(
+        postgresql_NUMERIC(precision=16, scale=6), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+
+class ObservationLog(Base):
+    """One row per LLM/embedding API call."""
+
+    __tablename__ = "observation_logs"
+    __table_args__ = (
+        Index("ix_obs_logs_tenant_chatbot_created", "tenant_id", "chatbot_id", "created_at"),
+        Index("ix_obs_logs_tenant_phase_created", "tenant_id", "phase", "created_at"),
+        Index("ix_obs_logs_tenant_created", "tenant_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    chatbot_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("chatbots.id", ondelete="SET NULL"), nullable=True
+    )
+    provider: Mapped[str] = mapped_column(Text, nullable=False)
+    model: Mapped[str] = mapped_column(Text, nullable=False)
+    phase: Mapped[str] = mapped_column(Text, nullable=False)  # chat_response, chat_rewrite, embed_query, embed_chunks, ingest_embed
+    direction: Mapped[str] = mapped_column(Text, nullable=False)  # 'input' | 'output'
+    tokens: Mapped[int] = mapped_column(Integer, nullable=False)
+    cost_usd: Mapped[Decimal] = mapped_column(
+        postgresql_NUMERIC(precision=16, scale=8), nullable=False
+    )
+    latency_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    request_id: Mapped[str] = mapped_column(Text, nullable=False)
+    chunk_count: Mapped[Optional[int]] = mapped_column(Integer)
+    error: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))

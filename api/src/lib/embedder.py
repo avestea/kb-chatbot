@@ -1,11 +1,13 @@
 from openai import AsyncOpenAI
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tiktoken import get_encoding
 from src.config.env import settings
 
 EMBEDDING_MODEL = "text-embedding-3-small"
 EmbeddingVector = list[float]
 
 _client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+_encoding = get_encoding("cl100k_base")
 
 
 @retry(
@@ -22,7 +24,15 @@ async def _embed_batch(batch: list[str]) -> list[EmbeddingVector]:
     return [item.embedding for item in sorted(response.data, key=lambda x: x.index)]
 
 
-async def embed_chunks(contents: list[str]) -> list[EmbeddingVector]:
+def count_tokens(contents: list[str]) -> int:
+    """Count tokens in a list of strings using tiktoken."""
+    return sum(len(_encoding.encode(c)) for c in contents)
+
+
+async def embed_chunks(
+    contents: list[str],
+    request_context=None,
+) -> list[EmbeddingVector]:
     """Batch 100 per API call. Output order matches input order."""
     BATCH = 100
     results: list[EmbeddingVector] = []

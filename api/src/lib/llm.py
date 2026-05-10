@@ -1,4 +1,5 @@
 import asyncio
+import uuid
 from dataclasses import dataclass, field
 from typing import AsyncIterator
 from anthropic import AsyncAnthropic
@@ -22,6 +23,7 @@ class UsageEvent:
     type: str = field(default='usage')
     input_tokens: int = field(default=0)
     output_tokens: int = field(default=0)
+    request_id: str = field(default_factory=lambda: str(uuid.uuid4()))
 
 
 StreamEvent = TokenEvent | UsageEvent

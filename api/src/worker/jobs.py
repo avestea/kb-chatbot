@@ -1,4 +1,5 @@
 import re
+import time
 import uuid
 from arq import Retry
 from sqlalchemy import select, update, delete
@@ -6,6 +7,7 @@ from src.db.base import async_session
 from src.db.models import Document, Chunk
 from src.lib.s3 import s3_client
 from src.lib.errors import UnsupportedMimeTypeError
+from src.lib.observability import measure_latency, log_request
 from src.config.env import settings
 from src.worker.parsers import get_parser_for
 from src.worker.chunker import chunk_text
@@ -56,6 +58,8 @@ async def ingest_document(ctx: dict, document_id: str):
 
             # 5. Embed + insert in batches of 100
             BATCH = 100
+            total_tokens = sum(c.token_count for c in draft_chunks)
+            embed_start = time.perf_counter()
             for i in range(0, len(draft_chunks), BATCH):
                 batch = draft_chunks[i:i + BATCH]
                 embeddings = await embed_chunks([c.content for c in batch])
@@ -73,6 +77,23 @@ async def ingest_document(ctx: dict, document_id: str):
                     for c, emb in zip(batch, embeddings)
                 ])
                 await db.commit()
+            embed_latency = int((time.perf_counter() - embed_start) * 1000)
+
+            # 5b. Log embedding usage for ingestion
+            async with async_session() as log_db:
+                await log_request(
+                    log_db,
+                    tenant_id=str(doc.tenant_id),
+                    chatbot_id=str(doc.chatbot_id),
+                    provider="openai",
+                    model="text-embedding-3-small",
+                    phase="ingest_embed",
+                    direction="input",
+                    tokens=total_tokens,
+                    latency_ms=embed_latency,
+                    chunk_count=len(draft_chunks),
+                )
+                await log_db.commit()
 
             # 6. Mark ready
             doc.status = "ready"

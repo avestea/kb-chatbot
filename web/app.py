@@ -52,6 +52,7 @@ def refresh_chatbots(token):
         gr.update(choices=names),
         choices,
         gr.update(choices=["All"] + names),
+        gr.update(choices=["All"] + names),
     )
 
 def create_chatbot_handler(token, name, system_prompt):
@@ -313,12 +314,67 @@ with gr.Blocks(title="KB Chatbot") as demo:
         inspect_btn = gr.Button("Inspect", variant="secondary")
         message_detail = gr.JSON(label="Messages + sources")
 
+    # ─── Tab: Observability ────────────────────────────────────────────────
+    with gr.Tab("Observability"):
+        gr.Markdown("## Token & Cost Tracking")
+        gr.Markdown("Track LLM spend per chatbot, per phase, and per day. Prices reflect vendor public rates.")
+
+        with gr.Row():
+            obs_days = gr.Number(label="Lookback (days)", value=30, minimum=1, maximum=365, step=1)
+            obs_chatbot_select = gr.Dropdown(label="Filter by chatbot", choices=["All"])
+            refresh_obs_btn = gr.Button("Refresh", variant="secondary")
+
+        # ── Summary cards ──────────────────────────────────────────────
+        with gr.Row():
+            obs_total_cost = gr.Number(label="Total cost (USD)", interactive=False)
+            obs_total_tokens = gr.Number(label="Total tokens", interactive=False)
+            obs_total_requests = gr.Number(label="Total requests", interactive=False)
+            obs_avg_cost = gr.Number(label="Avg cost/request (USD)", interactive=False)
+
+        # ── Cost by chatbot ────────────────────────────────────────────
+        gr.Markdown("### Cost by chatbot")
+        chatbot_cost_table = gr.Dataframe(
+            headers=["Chatbot", "Cost (USD)", "Tokens", "Requests"],
+            interactive=False,
+        )
+
+        # ── Cost by phase ──────────────────────────────────────────────
+        gr.Markdown("### Cost by phase")
+        phase_cost_table = gr.Dataframe(
+            headers=["Phase", "Cost (USD)", "Tokens", "Requests", "Avg Latency (ms)"],
+            interactive=False,
+        )
+
+        # ── Daily spend ────────────────────────────────────────────────
+        gr.Markdown("### Daily spend")
+        daily_cost_table = gr.Dataframe(
+            headers=["Day", "Cost (USD)", "Tokens", "Requests"],
+            interactive=False,
+        )
+
+        # ── Recent logs ────────────────────────────────────────────────
+        gr.Markdown("### Recent requests")
+        log_filter_phase = gr.Dropdown(
+            label="Filter by phase",
+            choices=["All", "chat_response", "chat_rewrite", "embed_query", "embed_chunks", "ingest_embed"],
+            value="All",
+        )
+        log_filter_provider = gr.Dropdown(
+            label="Filter by provider",
+            choices=["All", "anthropic", "openai"],
+            value="All",
+        )
+        logs_table = gr.Dataframe(
+            headers=["Time", "Provider", "Model", "Phase", "Direction", "Tokens", "Cost", "Latency (ms)"],
+            interactive=False,
+        )
+
     # ─── Event wiring ────────────────────────────────────────────────────────
 
     refresh_btn.click(
         refresh_chatbots,
         inputs=[token_input],
-        outputs=[chatbot_table, chatbot_select_docs, chatbot_select_chat, chatbot_choices_state, eval_chatbot_select],
+        outputs=[chatbot_table, chatbot_select_docs, chatbot_select_chat, chatbot_choices_state, eval_chatbot_select, obs_chatbot_select],
     )
     create_btn.click(
         create_chatbot_handler,
@@ -327,7 +383,7 @@ with gr.Blocks(title="KB Chatbot") as demo:
     ).then(
         refresh_chatbots,
         inputs=[token_input],
-        outputs=[chatbot_table, chatbot_select_docs, chatbot_select_chat, chatbot_choices_state, eval_chatbot_select],
+        outputs=[chatbot_table, chatbot_select_docs, chatbot_select_chat, chatbot_choices_state, eval_chatbot_select, obs_chatbot_select],
     )
 
     chatbot_select_docs.change(
@@ -406,6 +462,79 @@ with gr.Blocks(title="KB Chatbot") as demo:
         inputs=[token_input, conv_id_input],
         outputs=[message_detail],
     )
+
+    # ─── Observability refresh ────────────────────────────────────────────
+    def refresh_observability(token, days, chatbot_name, chatbot_choices, phase_filter, provider_filter):
+        client = get_client(token)
+        chatbot_id = chatbot_choices.get(chatbot_name) if chatbot_name != "All" else None
+        phase = phase_filter if phase_filter != "All" else None
+        provider = provider_filter if provider_filter != "All" else None
+
+        summary = run(client.get_observability_summary(chatbot_id, days))
+        by_chatbot = run(client.get_cost_by_chatbot(days))
+        by_phase = run(client.get_cost_by_phase(chatbot_id, days))
+        by_day = run(client.get_cost_by_day(chatbot_id, days))
+        logs = run(client.get_observability_logs(chatbot_id, phase=phase, provider=provider, limit=100))
+
+        # Cost by chatbot
+        cb_rows = [
+            [r["chatbot_name"], round(r["total_cost_usd"], 4), r["total_tokens"], r["total_requests"]]
+            for r in by_chatbot
+        ]
+
+        # Cost by phase
+        ph_rows = [
+            [
+                r["phase"],
+                round(r["total_cost_usd"], 4),
+                r["total_tokens"],
+                r["total_requests"],
+                int(r["avg_latency_ms"]),
+            ]
+            for r in by_phase
+        ]
+
+        # Daily spend
+        dd_rows = [
+            [r["day"], round(r["total_cost_usd"], 4), r["total_tokens"], r["total_requests"]]
+            for r in by_day
+        ]
+
+        # Recent logs
+        lg_rows = [
+            [
+                entry["created_at"][:19],
+                entry["provider"],
+                entry["model"],
+                entry["phase"],
+                entry["direction"],
+                entry["tokens"],
+                round(entry["cost_usd"], 6),
+                entry["latency_ms"],
+            ]
+            for entry in logs.get("items", [])
+        ]
+
+        return (
+            summary.get("total_cost_usd", 0),
+            summary.get("total_tokens", 0),
+            summary.get("total_requests", 0),
+            summary.get("avg_cost_per_request", 0),
+            gr.Dataframe(value=cb_rows),
+            gr.Dataframe(value=ph_rows),
+            gr.Dataframe(value=dd_rows),
+            gr.Dataframe(value=lg_rows),
+        )
+
+    _obs_inputs = [token_input, obs_days, obs_chatbot_select, chatbot_choices_state, log_filter_phase, log_filter_provider]
+    _obs_outputs = [obs_total_cost, obs_total_tokens, obs_total_requests, obs_avg_cost,
+                    chatbot_cost_table, phase_cost_table, daily_cost_table, logs_table]
+
+    refresh_obs_btn.click(refresh_observability, inputs=_obs_inputs, outputs=_obs_outputs)
+    obs_days.change(refresh_observability, inputs=_obs_inputs, outputs=_obs_outputs)
+    obs_chatbot_select.change(refresh_observability, inputs=_obs_inputs, outputs=_obs_outputs)
+    log_filter_phase.change(refresh_observability, inputs=_obs_inputs, outputs=_obs_outputs)
+    log_filter_provider.change(refresh_observability, inputs=_obs_inputs, outputs=_obs_outputs)
 
 if __name__ == "__main__":
     demo.queue(default_concurrency_limit=10)

@@ -14,11 +14,12 @@ KB Chatbot is a multi-tenant SaaS RAG (Retrieval-Augmented Generation) system. O
 8. [Retrieval Algorithm](#retrieval-algorithm)
 9. [Query Rewriting](#query-rewriting)
 10. [Feedback and Analytics](#feedback-and-analytics)
-11. [Multi-Tenancy](#multi-tenancy)
-12. [Authentication](#authentication)
-13. [File Storage](#file-storage)
-14. [Gradio UI](#gradio-ui)
-15. [Key Source Files](#key-source-files)
+11. [Observability & Cost Tracking](#observability--cost-tracking)
+12. [Multi-Tenancy](#multi-tenancy)
+13. [Authentication](#authentication)
+14. [File Storage](#file-storage)
+15. [Gradio UI](#gradio-ui)
+16. [Key Source Files](#key-source-files)
 
 ---
 
@@ -235,6 +236,46 @@ One rating per assistant message. Upserts on `message_id`.
 | `created_at` | TIMESTAMP | — |
 | `updated_at` | TIMESTAMP | Updated on upsert |
 
+### `observation_logs`
+
+One row per LLM/embedding API call. Captures tokens, cost, and latency for cost tracking.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | UUID PK | — |
+| `tenant_id` | UUID FK → tenants | Denormalized |
+| `chatbot_id` | UUID FK → chatbots | Nullable — embedding/rewrite calls |
+| `provider` | TEXT | `anthropic` · `openai` |
+| `model` | TEXT | `claude-sonnet-4-6`, `claude-haiku-4-5-20251001`, `text-embedding-3-small` |
+| `phase` | TEXT | `chat_response` · `chat_rewrite` · `embed_query` · `embed_chunks` · `ingest_embed` |
+| `direction` | TEXT | `input` · `output` |
+| `tokens` | INT | Token count for this direction |
+| `cost_usd` | NUMERIC(16,8) | Calculated cost in USD |
+| `latency_ms` | INT | Milliseconds for this API call |
+| `request_id` | TEXT | Opaque ID for tracing across phases |
+| `chunk_count` | INT NULL | Number of chunks embedded (bulk calls) |
+| `error` | TEXT NULL | Error message if the call failed |
+| `created_at` | TIMESTAMP | Call timestamp |
+| `deleted_at` | TIMESTAMP NULL | Soft delete |
+
+Indexes: `(tenant_id, chatbot_id, created_at)`, `(tenant_id, phase, created_at)`, `(tenant_id, created_at)`
+
+### `cost_rates`
+
+Price table mapping model + direction → price per 1M tokens. Seeded at startup, updatable as vendor prices change.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | UUID PK | — |
+| `provider` | TEXT | `anthropic` · `openai` |
+| `model` | TEXT | Exact model string |
+| `direction` | TEXT | `input` · `output` |
+| `price_per_1m_tokens` | NUMERIC(16,6) | e.g. `3.00` = $3 per 1M input tokens |
+| `updated_at` | TIMESTAMP | When this rate was last updated |
+| `deleted_at` | TIMESTAMP NULL | Soft delete |
+
+Unique constraint: `(provider, model, direction, deleted_at)`
+
 ---
 
 ## API Routes
@@ -321,6 +362,45 @@ GET /api/v1/analytics/conversations/{id}/messages
           {"role":"assistant","content":"...","source_chunks":[...],"rating":1|−1|null,"created_at":"..."}
         ]
       }
+```
+
+### Observability
+
+All routes require auth. Public chat endpoint does **not** generate observation logs (embedding happens server-side).
+
+```
+GET /api/v1/observability/summary
+    ?chatbot_id=<UUID>  (optional)
+    ?days=<int>         (default 30, max 365)
+    → {
+        total_cost_usd, total_tokens, total_requests,
+        avg_cost_per_request, avg_latency_ms
+      }
+
+GET /api/v1/observability/breakdown/by-chatbot
+    ?days=30
+    → [{chatbot_id, chatbot_name, total_cost_usd, total_tokens, total_requests}, ...]
+
+GET /api/v1/observability/breakdown/by-phase
+    ?days=30
+    → [{phase, total_cost_usd, total_tokens, total_requests, avg_latency_ms}, ...]
+
+GET /api/v1/observability/breakdown/by-day
+    ?chatbot_id=<UUID>  (optional)
+    ?days=30
+    → [{day, total_cost_usd, total_tokens, total_requests}, ...]
+
+GET /api/v1/observability/logs
+    ?chatbot_id=<UUID>  (optional)
+    ?phase=chat_response (optional)
+    ?provider=anthropic  (optional)
+    ?limit=50
+    ?offset=0
+    → {"items": [...], "total": N, "has_more": bool}
+
+Each log item:
+    {id, chatbot_id, provider, model, phase, direction, tokens,
+     cost_usd, latency_ms, chunk_count, request_id, error, created_at}
 ```
 
 ---
@@ -562,6 +642,58 @@ The `conversations` endpoint accepts `?no_answer_only=true` to surface conversat
 
 ---
 
+## Observability & Cost Tracking
+
+### How it works
+
+Every LLM and embedding API call is logged to the `observation_logs` table. The chat flow touches three LLM endpoints, each producing its own log row:
+
+```
+User asks: "What is the refund policy for digital goods?"
+
+1. Query rewrite (Claude Haiku 4.5)
+   └─ phase: chat_rewrite, direction: input, model: claude-haiku-4-5-20251001
+
+2. Embed query (OpenAI text-embedding-3-small)
+   └─ phase: embed_query, direction: input, model: text-embedding-3-small
+
+3. Chat response (Claude Sonnet 4.6)
+   ├─ phase: chat_response, direction: input  (system prompt + history + chunks)
+   └─ phase: chat_response, direction: output  (the generated answer)
+```
+
+Each log row carries:
+- **tokens**: token count for this direction
+- **cost_usd**: calculated as `tokens / 1_000_000 * price_per_1m_tokens`
+- **latency_ms**: wall-clock time for the API call
+- **request_id**: same across all phases of one chat request, enabling tracing
+
+### Cost calculation
+
+Prices are defined in `api/src/config/observability.py` and seeded into `cost_rates` at startup:
+
+| Provider | Model | Direction | Price / 1M tokens |
+|---|---|---|---|
+| Anthropic | Claude Sonnet 4.6 | input | $3.00 |
+| Anthropic | Claude Sonnet 4.6 | output | $15.00 |
+| Anthropic | Claude Haiku 4.5 | input | $0.80 |
+| Anthropic | Claude Haiku 4.5 | output | $4.00 |
+| OpenAI | text-embedding-3-small | input | $0.02 |
+
+### Cost breakdowns
+
+The `/observability/breakdown/*` endpoints aggregate by chatbot, phase, or day:
+
+- **by-chatbot**: which chatbot burns the most money (useful for multi-chatbot tenants)
+- **by-phase**: which stage of the RAG pipeline is the cost driver (usually `chat_response` output)
+- **by-day**: daily spend trend for budget tracking
+
+### No third-party metrics
+
+No Prometheus, no Datadog, no separate metrics database. Everything lives in Postgres and is surfaced through the Gradio Observability tab. This is sufficient for early-stage usage tracking and keeps the infrastructure minimal.
+
+---
+
 ## Multi-Tenancy
 
 Every piece of data is owned by a tenant. The hierarchy is:
@@ -635,7 +767,7 @@ When a document or chatbot is soft-deleted, the S3 object is **not** deleted —
 
 ## Gradio UI
 
-The web UI (`web/app.py`) is a Gradio 6 Blocks app with four tabs. It communicates exclusively with the FastAPI backend via `web/api_client.py`.
+The web UI (`web/app.py`) is a Gradio 6 Blocks app with five tabs (Chatbots, Documents, Chat, Evaluation, Observability). It communicates exclusively with the FastAPI backend via `web/api_client.py`.
 
 ### Component choices
 
@@ -660,6 +792,7 @@ The `chat_handler` async generator yields on every SSE token. During streaming t
 | `api/src/main.py` | FastAPI app, router registration, CORS, lifespan |
 | `api/src/config/env.py` | `Settings` class — reads all environment variables via Pydantic |
 | `api/src/config/chat.py` | Chat constants (`MAX_MESSAGE_TOKENS`, `TOP_K_CHUNKS`, etc.) |
+| `api/src/config/observability.py` | Token price constants per provider/model/direction |
 | `api/src/db/models.py` | All SQLAlchemy ORM models |
 | `api/src/db/base.py` | Async engine and session factory |
 | `api/src/db/tenant_scope.py` | `tenant_where()` access control helper |
@@ -667,6 +800,7 @@ The `chat_handler` async generator yields on every SSE token. During streaming t
 | `api/src/auth/clerk.py` | `verify_token()` — demo and Clerk implementations |
 | `api/src/lib/llm.py` | `stream_completion()` — Anthropic streaming wrapper |
 | `api/src/lib/embedder.py` | `embed_chunks()` — OpenAI batched embedding with retry |
+| `api/src/lib/observability.py` | `log_request()`, `RequestContext`, `measure_latency()` — token & cost tracking |
 | `api/src/lib/s3.py` | S3/MinIO upload/download/delete |
 | `api/src/lib/redis.py` | ARQ Redis connection pool |
 | `api/src/rag/retrieve.py` | `retrieve_context()` — hybrid BM25+vector+RRF retrieval |
@@ -677,6 +811,7 @@ The `chat_handler` async generator yields on every SSE token. During streaming t
 | `api/src/routes/documents.py` | Document upload, list, delete |
 | `api/src/routes/analytics.py` | Summary, conversations, message thread |
 | `api/src/routes/feedback.py` | Feedback upsert |
+| `api/src/routes/observability.py` | Cost summaries, breakdowns, request logs |
 | `api/src/worker/jobs.py` | `ingest_document()` ARQ job |
 | `api/src/worker/chunker.py` | `chunk_text()` token-aware splitter |
 | `api/src/worker/parsers/` | PDF, DOCX, HTML, TXT text extractors |
