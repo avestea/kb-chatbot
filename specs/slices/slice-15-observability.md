@@ -222,10 +222,10 @@ Modify `stream_completion()` to yield the usage data along with the request_id s
 
 @dataclass
 class UsageEvent:
-    type: str = 'usage'
-    input_tokens: int = 0
-    output_tokens: int = 0
-    request_id: str = ''  # added — for observability correlation
+    type: str = field(default='usage')
+    input_tokens: int = field(default=0)
+    output_tokens: int = field(default=0)
+    request_id: str = field(default_factory=lambda: str(uuid.uuid4()))  # added — for observability correlation
 ```
 
 The chat route (Slice 8) will receive this `request_id` on the final `UsageEvent` and pass it to `log_request()`.
@@ -234,41 +234,53 @@ The chat route (Slice 8) will receive this `request_id` on the final `UsageEvent
 
 ## Hook into embedder (`api/src/lib/embedder.py`)
 
-Modify `embed_chunks()` to accept an optional `RequestContext` and log usage:
+Modify `embed_chunks()` to accept an optional `RequestContext`, and add a `count_tokens()` helper used by callers for logging:
 
 ```python
-# In api/src/lib/embedder.py, add to the function signature:
+# In api/src/lib/embedder.py:
 
-from src.lib.observability import RequestContext
+_encoding = get_encoding("cl100k_base")
+
+def count_tokens(contents: list[str]) -> int:
+    """Count tokens in a list of strings using tiktoken."""
+    return sum(len(_encoding.encode(c)) for c in contents)
 
 async def embed_chunks(
     contents: list[str],
-    request_context: RequestContext | None = None,
+    request_context=None,
 ) -> list[EmbeddingVector]:
-    """
-    Batches up to 100 per OpenAI call.
-    If request_context is provided, logs token usage and latency.
-    """
+    """Batches up to 100 per OpenAI call."""
 ```
 
-The worker (Slice 6) calls this during ingestion and passes a context for `embed_chunks` phase. The retrieval function (Slice 7) passes a context for the `embed_query` call.
+**Note:** `embed_chunks` accepts `request_context` in its signature for API consistency but does **not** log internally. Logging for `embed_query` is done in `retrieve.py` and for `ingest_embed` in `worker/jobs.py`.
 
 ---
 
 ## Hook into query rewriting (`api/src/rag/rewrite.py`)
 
-Add the same `request_context` parameter to `rewrite_query()`:
+Add `request_context` parameter and a separate token-counting helper:
 
 ```python
 async def rewrite_query(
-    history: list[ChatTurn],
-    current_query: str,
-    request_context: RequestContext | None = None,
+    message: str,
+    history: list[dict],
+    request_context=None,
 ) -> str:
-    """Rewrite follow-up into self-contained query. Logs usage if context provided."""
+    """Rewrite follow-up into self-contained query. Returns original if history is empty or rewrite fails."""
+
+
+def count_rewrite_tokens(message: str, history: list[dict]) -> int:
+    """Count input tokens for the rewrite call (used by the chat route before calling rewrite_query)."""
+    recent = history[-6:]
+    transcript_lines = [f"{m['role'].upper()}: {m['content']}" for m in recent]
+    prompt = (
+        f"Conversation so far:\n" + "\n".join(transcript_lines) +
+        f"\n\nNew message: {message}\n\nRewritten query:"
+    )
+    return len(_encoding.encode(prompt))
 ```
 
-The chat route passes the context when calling this.
+**Note:** `rewrite_query` accepts `request_context` in its signature but does **not** log internally. The chat route calls `count_rewrite_tokens()` before calling `rewrite_query()`, then logs with `log_request()` itself.
 
 ---
 
@@ -677,15 +689,17 @@ with gr.Tab("Observability"):
     )
 
 
-def refresh_observability(token, days, chatbot_name, chatbot_choices):
+def refresh_observability(token, days, chatbot_name, chatbot_choices, phase_filter, provider_filter):
     client = get_client(token)
     chatbot_id = chatbot_choices.get(chatbot_name) if chatbot_name != "All" else None
+    phase = phase_filter if phase_filter != "All" else None
+    provider = provider_filter if provider_filter != "All" else None
 
     summary = run(client.get_observability_summary(chatbot_id, days))
     by_chatbot = run(client.get_cost_by_chatbot(days))
     by_phase = run(client.get_cost_by_phase(chatbot_id, days))
     by_day = run(client.get_cost_by_day(chatbot_id, days))
-    logs = run(client.get_observability_logs(chatbot_id, limit=100))
+    logs = run(client.get_observability_logs(chatbot_id, phase=phase, provider=provider, limit=100))
 
     # Cost by chatbot
     cb_rows = [
@@ -738,24 +752,15 @@ def refresh_observability(token, days, chatbot_name, chatbot_choices):
     )
 
 
-refresh_obs_btn.click(
-    refresh_observability,
-    inputs=[token_input, obs_days, obs_chatbot_select, chatbot_choices_state],
-    outputs=[obs_total_cost, obs_total_tokens, obs_total_requests, obs_avg_cost,
-             chatbot_cost_table, phase_cost_table, daily_cost_table, logs_table],
-)
-obs_days.change(
-    refresh_observability,
-    inputs=[token_input, obs_days, obs_chatbot_select, chatbot_choices_state],
-    outputs=[obs_total_cost, obs_total_tokens, obs_total_requests, obs_avg_cost,
-             chatbot_cost_table, phase_cost_table, daily_cost_table, logs_table],
-)
-obs_chatbot_select.change(
-    refresh_observability,
-    inputs=[token_input, obs_days, obs_chatbot_select, chatbot_choices_state],
-    outputs=[obs_total_cost, obs_total_tokens, obs_total_requests, obs_avg_cost,
-             chatbot_cost_table, phase_cost_table, daily_cost_table, logs_table],
-)
+_obs_inputs = [token_input, obs_days, obs_chatbot_select, chatbot_choices_state, log_filter_phase, log_filter_provider]
+_obs_outputs = [obs_total_cost, obs_total_tokens, obs_total_requests, obs_avg_cost,
+                chatbot_cost_table, phase_cost_table, daily_cost_table, logs_table]
+
+refresh_obs_btn.click(refresh_observability, inputs=_obs_inputs, outputs=_obs_outputs)
+obs_days.change(refresh_observability, inputs=_obs_inputs, outputs=_obs_outputs)
+obs_chatbot_select.change(refresh_observability, inputs=_obs_inputs, outputs=_obs_outputs)
+log_filter_phase.change(refresh_observability, inputs=_obs_inputs, outputs=_obs_outputs)
+log_filter_provider.change(refresh_observability, inputs=_obs_inputs, outputs=_obs_outputs)
 ```
 
 ---
@@ -804,27 +809,27 @@ from src.db.base import async_session
             await log_db.commit()  # single commit for both rows
 ```
 
-Also log the query rewrite call (if Turn ≥ 2):
+Also log the query rewrite call. Tokens are counted with `count_rewrite_tokens()` **before** calling `rewrite_query()`. Logging only happens when the query was actually rewritten (i.e. `retrieval_query != body.message`):
 
 ```python
-        # Query rewriting (turns ≥ 2)
-        rewritten = body.message
-        rewrite_latency = 0
-        if history and len(history) > 0:
-            rewrite_ctx = RequestContext.new()
-            async with measure_latency() as lat:
-                rewritten, rewrite_tokens = await rewrite_query(
-                    history, body.message,
-                    request_context=rewrite_ctx,
-                )
-                rewrite_latency = lat()
+        # Query rewriting
+        rewrite_ctx = RequestContext.new()
+        rewrite_tokens = count_rewrite_tokens(body.message, prior_history) if prior_history else 0
+        async with measure_latency() as lat:
+            retrieval_query = await rewrite_query(
+                body.message, prior_history,
+                request_context=rewrite_ctx,
+            )
+        rewrite_latency = lat()
+
+        if retrieval_query != body.message:
             async with async_session() as log_db:
                 await log_request(
                     log_db,
                     tenant_id=str(chatbot.tenant_id),
                     chatbot_id=str(chatbot.id),
                     provider="anthropic",
-                    model="claude-haiku-4-5",
+                    model="claude-haiku-4-5-20251001",
                     phase="chat_rewrite",
                     direction="input",
                     tokens=rewrite_tokens,
@@ -854,28 +859,34 @@ async def retrieve_context(
 
 ### Worker (Slice 6) — `api/src/worker/jobs.py`
 
-During ingestion, the worker calls `embed_chunks()` on all parsed text chunks. Log this as `ingest_embed`:
+During ingestion, the worker embeds chunks in batches of 100. Total latency is measured with `time.perf_counter()` around the entire batching loop, then logged once as `ingest_embed`:
 
 ```python
 # In ingest_document():
-from src.lib.observability import log_request, measure_latency
+import time
+from src.lib.observability import log_request
 from src.db.base import async_session
 
 # ... after parsing and chunking:
-async with measure_latency() as lat:
-    embeddings = await embed_chunks([c.content for c in draft_chunks])
-latency_ms = lat()
+total_tokens = sum(c.token_count for c in draft_chunks)
+embed_start = time.perf_counter()
+for i in range(0, len(draft_chunks), BATCH):
+    batch = draft_chunks[i:i + BATCH]
+    embeddings = await embed_chunks([c.content for c in batch])
+    # ... insert batch into DB ...
+embed_latency = int((time.perf_counter() - embed_start) * 1000)
+
 async with async_session() as log_db:
     await log_request(
         log_db,
-        tenant_id=str(tenant_id),
-        chatbot_id=str(chatbot_id),
+        tenant_id=str(doc.tenant_id),
+        chatbot_id=str(doc.chatbot_id),
         provider="openai",
         model="text-embedding-3-small",
         phase="ingest_embed",
         direction="input",
-        tokens=sum(c.token_count for c in draft_chunks),
-        latency_ms=latency_ms,
+        tokens=total_tokens,
+        latency_ms=embed_latency,
         chunk_count=len(draft_chunks),
     )
     await log_db.commit()
