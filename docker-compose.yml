@@ -49,6 +49,15 @@ services:
     volumes: ["./api:/app"]
     ports: ["8000:8000"]
     env_file: .env
+    environment:
+      HTTP_PROXY: ""
+      HTTPS_PROXY: ""
+      http_proxy: ""
+      https_proxy: ""
+      NO_PROXY: ""
+      no_proxy: ""
+      ALL_PROXY: ""
+      all_proxy: ""
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
@@ -63,6 +72,15 @@ services:
     command: arq src.worker.WorkerSettings
     volumes: ["./api:/app"]
     env_file: .env
+    environment:
+      HTTP_PROXY: ""
+      HTTPS_PROXY: ""
+      http_proxy: ""
+      https_proxy: ""
+      NO_PROXY: ""
+      no_proxy: ""
+      ALL_PROXY: ""
+      all_proxy: ""
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
@@ -72,6 +90,14 @@ services:
     command: python -u app.py
     environment:
       PYTHONUNBUFFERED: "1"
+      HTTP_PROXY: ""
+      HTTPS_PROXY: ""
+      http_proxy: ""
+      https_proxy: ""
+      NO_PROXY: ""
+      no_proxy: ""
+      ALL_PROXY: ""
+      all_proxy: ""
     volumes: ["./web:/app"]
     ports: ["7860:7860"]
     env_file: .env
