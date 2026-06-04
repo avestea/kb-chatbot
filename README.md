@@ -83,7 +83,7 @@ Toggle **Show failures only** to filter to conversations where retrieval found n
 | `AUTH_MODE` | no | `demo` | `demo` (any Bearer token works) or `clerk` |
 | `CLERK_SECRET_KEY` | if clerk | — | Clerk secret key |
 | `CLERK_WEBHOOK_SECRET` | if clerk | — | Clerk webhook signing secret |
-| `DASHBOARD_ORIGIN` | no | `http://localhost:7860` | Allowed CORS origin for the UI |
+| `DASHBOARD_ORIGIN` | no | `http://localhost:7860` | CORS origin allowed for management API endpoints. Set to `*` to allow all origins (not recommended in production). The chat endpoint always allows any origin so chatbots can be embedded in external sites. |
 
 ## Service Ports
 
@@ -192,6 +192,13 @@ uv sync --all-packages --extra dev
 ```
 
 Point your IDE's Python interpreter at `.venv/bin/python`.
+
+## Security Notes
+
+- **Demo mode is not production-safe.** Any Bearer token value creates a new tenant automatically. Switch to `AUTH_MODE=clerk` for real deployments.
+- **Chat endpoint rate limiting.** `POST /api/v1/chat/{id}/message` is a public endpoint (no auth required). It is rate-limited to **60 requests per minute per chatbot per client IP** using Redis. If you expose this publicly, consider adding an additional reverse-proxy rate limiter (e.g., nginx `limit_req`) for defence-in-depth.
+- **CORS.** Management API endpoints honour `DASHBOARD_ORIGIN`. The chat endpoint sends `Access-Control-Allow-Origin: *` so chatbots can be embedded in external pages.
+- **File uploads** are capped at 20 MB and restricted to PDF, DOCX, HTML, and TXT by MIME type. Filenames are sanitized (path components stripped) before being stored.
 
 ## Authentication
 

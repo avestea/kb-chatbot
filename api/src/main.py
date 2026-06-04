@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from src.lib.log import log
 from src.lib.errors import ApiError
 from src.db.base import engine, async_session
+from src.config.env import settings
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -25,9 +26,10 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan, title="KBChat API", version="0.1.0")
 
+_cors_origins = ["*"] if settings.DASHBOARD_ORIGIN == "*" else [settings.DASHBOARD_ORIGIN]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )

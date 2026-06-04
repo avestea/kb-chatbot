@@ -1,6 +1,7 @@
 import asyncio
 import json
 import uuid
+from uuid import UUID
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
@@ -10,6 +11,8 @@ from src.db.base import async_session
 from src.db.models import Chatbot, Conversation, Message
 from src.lib.llm import stream_completion, ChatTurn
 from src.lib.observability import RequestContext, log_request, measure_latency
+from src.lib.redis import get_redis_client
+from src.lib.errors import RateLimitError
 from src.rag.retrieve import retrieve_context
 from src.rag.rewrite import rewrite_query, count_rewrite_tokens
 from src.rag.prompt import build_system_prompt, PROMPT_VERSION
@@ -18,9 +21,32 @@ from src.lib.log import log
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
+_RATE_LIMIT_REQUESTS = 60
+_RATE_LIMIT_WINDOW = 60
+
+
+async def _check_rate_limit(chatbot_id: UUID, request: Request) -> None:
+    try:
+        client = await get_redis_client()
+        forwarded = request.headers.get("X-Forwarded-For")
+        ip = forwarded.split(",")[0].strip() if forwarded else (
+            request.client.host if request.client else "unknown"
+        )
+        key = f"rate:chat:{chatbot_id}:{ip}"
+        count = await client.incr(key)
+        if count == 1:
+            await client.expire(key, _RATE_LIMIT_WINDOW)
+        if count > _RATE_LIMIT_REQUESTS:
+            raise RateLimitError(f"Too many requests. Retry after {_RATE_LIMIT_WINDOW} seconds.")
+    except RateLimitError:
+        raise
+    except Exception:
+        pass  # fail open if Redis is unavailable
+
 
 @router.post("/{chatbot_id}/message")
-async def chat_message(chatbot_id: str, body: ChatRequest, request: Request):
+async def chat_message(chatbot_id: UUID, body: ChatRequest, request: Request):
+    await _check_rate_limit(chatbot_id, request)
     return StreamingResponse(
         _generate(chatbot_id, body, request),
         media_type="text/event-stream",
@@ -28,11 +54,12 @@ async def chat_message(chatbot_id: str, body: ChatRequest, request: Request):
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
+            "Access-Control-Allow-Origin": "*",
         },
     )
 
 
-async def _generate(chatbot_id: str, body: ChatRequest, request: Request):
+async def _generate(chatbot_id: UUID, body: ChatRequest, request: Request):
     def sse(event: str, data: dict) -> str:
         return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
@@ -53,7 +80,7 @@ async def _generate(chatbot_id: str, body: ChatRequest, request: Request):
                 return
 
             stmt = pg_insert(Conversation).values(
-                chatbot_id=uuid.UUID(chatbot_id),
+                chatbot_id=chatbot_id,
                 session_id=body.session_id,
             ).on_conflict_do_update(
                 constraint="conversations_chatbot_session_uq",
@@ -109,7 +136,7 @@ async def _generate(chatbot_id: str, body: ChatRequest, request: Request):
                 await log_db.commit()
 
         chunks = await retrieve_context(
-            chatbot_id=chatbot_id, query=retrieval_query,
+            chatbot_id=str(chatbot_id), query=retrieval_query,
             request_context=request_ctx,
             tenant_id=str(chatbot.tenant_id),
         )

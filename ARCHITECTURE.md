@@ -744,6 +744,14 @@ async def get_current_tenant(
 
 Routes that require auth declare `Depends(get_current_tenant)`. The chat endpoint (`/api/v1/chat/{id}/message`) does **not** use this dependency — it is intentionally public so chatbots can be embedded in external websites without exposing API tokens.
 
+### Rate limiting (chat endpoint)
+
+Because the chat endpoint is public, it applies a Redis-based fixed-window rate limiter: **60 requests per minute per (chatbot_id, client IP)**. The limit is enforced in `api/src/routes/chat.py` before the SSE stream is opened, so over-limit requests receive a JSON `429` response rather than an SSE error event. The limiter fails open (no block) if Redis is temporarily unavailable.
+
+### CORS
+
+Management API routes use the `DASHBOARD_ORIGIN` environment variable as the allowed CORS origin. The chat endpoint unconditionally returns `Access-Control-Allow-Origin: *` so browser-based embedding on external sites works without configuring CORS.
+
 ---
 
 ## File Storage

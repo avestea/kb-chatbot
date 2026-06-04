@@ -1,3 +1,4 @@
+import os
 from fastapi import APIRouter, Depends, UploadFile, File, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete, func
@@ -41,12 +42,16 @@ async def upload_document(
     if mime_type not in ALLOWED_MIME_TYPES:
         raise UnsupportedMimeTypeError(mime_type)
 
-    data = await file.read()
-    if len(data) > MAX_FILE_SIZE:
-        raise PayloadTooLargeError("File exceeds 20MB limit")
+    safe_filename = os.path.basename(file.filename or "upload").replace("\x00", "") or "upload"
+
+    data = b""
+    while chunk := await file.read(65536):
+        data += chunk
+        if len(data) > MAX_FILE_SIZE:
+            raise PayloadTooLargeError("File exceeds 20MB limit")
 
     document_id = uuid4()
-    s3_key = f"{auth.tenant_id}/{chatbot_id}/{document_id}/{file.filename}"
+    s3_key = f"{auth.tenant_id}/{chatbot_id}/{document_id}/{safe_filename}"
 
     async with s3_client() as s3:
         await s3.put_object(
@@ -60,7 +65,7 @@ async def upload_document(
         id=document_id,
         chatbot_id=chatbot_id,
         tenant_id=auth.tenant_id,
-        filename=file.filename,
+        filename=safe_filename,
         mime_type=mime_type,
         s3_key=s3_key,
         status="pending",
