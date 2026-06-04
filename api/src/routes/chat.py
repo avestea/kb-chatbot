@@ -1,6 +1,5 @@
 import asyncio
 import json
-import uuid
 from uuid import UUID
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse

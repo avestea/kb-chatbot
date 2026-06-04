@@ -44,11 +44,14 @@ async def upload_document(
 
     safe_filename = os.path.basename(file.filename or "upload").replace("\x00", "") or "upload"
 
-    data = b""
+    parts: list[bytes] = []
+    size = 0
     while chunk := await file.read(65536):
-        data += chunk
-        if len(data) > MAX_FILE_SIZE:
+        size += len(chunk)
+        if size > MAX_FILE_SIZE:
             raise PayloadTooLargeError("File exceeds 20MB limit")
+        parts.append(chunk)
+    data = b"".join(parts)
 
     document_id = uuid4()
     s3_key = f"{auth.tenant_id}/{chatbot_id}/{document_id}/{safe_filename}"

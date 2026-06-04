@@ -199,6 +199,7 @@ Point your IDE's Python interpreter at `.venv/bin/python`.
 - **Chat endpoint rate limiting.** `POST /api/v1/chat/{id}/message` is a public endpoint (no auth required). It is rate-limited to **60 requests per minute per chatbot per client IP** using Redis. If you expose this publicly, consider adding an additional reverse-proxy rate limiter (e.g., nginx `limit_req`) for defence-in-depth.
 - **CORS.** Management API endpoints honour `DASHBOARD_ORIGIN`. The chat endpoint sends `Access-Control-Allow-Origin: *` so chatbots can be embedded in external pages.
 - **File uploads** are capped at 20 MB and restricted to PDF, DOCX, HTML, and TXT by MIME type. Filenames are sanitized (path components stripped) before being stored.
+- **Change all default credentials before any non-local deployment.** The bundled `docker-compose.yml` and `.env.example` ship with well-known dev defaults (`postgres:postgres`, `minioadmin:minioadmin`) intended only for the local stack. Replace them — along with setting real `OPENAI_API_KEY`/`ANTHROPIC_API_KEY` — before exposing this anywhere beyond your machine.
 
 ## Authentication
 
