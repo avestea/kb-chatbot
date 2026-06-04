@@ -54,7 +54,6 @@ async def chat_message(chatbot_id: UUID, body: ChatRequest, request: Request):
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
-            "Access-Control-Allow-Origin": "*",
         },
     )
 

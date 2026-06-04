@@ -3,10 +3,36 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.types import ASGIApp, Receive, Scope, Send
 from src.lib.log import log
 from src.lib.errors import ApiError
 from src.db.base import engine, async_session
 from src.config.env import settings
+
+
+class _RoutedCORSMiddleware:
+    """
+    Routes CORS policy by path prefix.
+    /api/v1/chat/* gets allow_origins=["*"] so the chat widget can be embedded on
+    any external site — OPTIONS preflights from unlisted origins are answered
+    correctly at the middleware layer, not just on the response body.
+    All other routes are restricted to DASHBOARD_ORIGIN.
+    """
+
+    def __init__(self, app: ASGIApp, dashboard_origin: str) -> None:
+        mgmt_origins = ["*"] if dashboard_origin == "*" else [dashboard_origin]
+        self._chat_cors = CORSMiddleware(
+            app, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
+        )
+        self._mgmt_cors = CORSMiddleware(
+            app, allow_origins=mgmt_origins, allow_methods=["*"], allow_headers=["*"]
+        )
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http" and scope.get("path", "").startswith("/api/v1/chat/"):
+            await self._chat_cors(scope, receive, send)
+        else:
+            await self._mgmt_cors(scope, receive, send)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -26,13 +52,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan, title="KBChat API", version="0.1.0")
 
-_cors_origins = ["*"] if settings.DASHBOARD_ORIGIN == "*" else [settings.DASHBOARD_ORIGIN]
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=_cors_origins,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app.add_middleware(_RoutedCORSMiddleware, dashboard_origin=settings.DASHBOARD_ORIGIN)
 
 
 @app.exception_handler(ApiError)
