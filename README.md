@@ -253,3 +253,7 @@ docker-compose.yml          Orchestrates all 7 services
 ```
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for a detailed explanation of the system design, data flows, and key algorithms.
+
+## License
+
+Released under the [MIT License](LICENSE) — free to use, modify, and distribute, including commercially. Attribution (keeping the copyright and license notice) is the only requirement.

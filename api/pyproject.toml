@@ -1,11 +1,12 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
 name = "kbchat-api"
 version = "0.1.0"
 requires-python = ">=3.12"
+license = "MIT"
 dependencies = [
     "fastapi[standard]>=0.115.0",
     "uvicorn[standard]>=0.32.0",
