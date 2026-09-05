@@ -2,6 +2,15 @@
 
 A SaaS knowledge base chatbot builder. Operators upload documents (PDF, DOCX, HTML, TXT) and end-users chat against them via a RAG (Retrieval-Augmented Generation) pipeline. Everything runs in Docker — the only host dependency is Docker.
 
+> [!WARNING]
+> **The default mode has no authentication.** With `AUTH_MODE=demo`, *any*
+> string sent as `Authorization: Bearer <token>` is accepted and silently
+> creates a tenant keyed to that string. That is deliberate — it is what lets
+> you run the whole stack locally in one command — but it means **do not
+> expose this to a network you do not control**. Real deployments want
+> `AUTH_MODE=clerk`; see [Authentication](#authentication) and
+> [Security Notes](#security-notes).
+
 ## Prerequisites
 
 - [Docker](https://docs.docker.com/get-docker/) with Compose v2 (`docker compose` command)
@@ -35,7 +44,7 @@ open http://localhost:7860
 
 ## Using the Gradio UI
 
-Navigate to **http://localhost:7860** and enter `alice` (or any string) as the API token.
+Navigate to **http://localhost:7860** and enter `alice` (or any string) as the API token — in demo mode the token *is* the identity, and any value works.
 
 ### Step 1 — Create a chatbot
 
@@ -80,6 +89,7 @@ Toggle **Show failures only** to filter to conversations where retrieval found n
 | `S3_SECRET_ACCESS_KEY` | yes | `minioadmin` | MinIO / AWS secret key |
 | `OPENAI_API_KEY` | yes | — | Used for `text-embedding-3-small` |
 | `ANTHROPIC_API_KEY` | yes | — | Used for Claude Sonnet 4.6 (chat) and Haiku 4.5 (query rewriting) |
+| `RETRIEVAL_MIN_SIMILARITY` | no | `0.32` | Cosine floor for a vector hit to count. Corpus- and model-dependent: measured on a 17-document Markdown corpus with `text-embedding-3-small`, answerable questions scored 0.343–0.613 at top-1 and unanswerable ones 0.169–0.284. Raise it if the bot answers when it should decline; lower it if it declines on documents you know are indexed. |
 | `AUTH_MODE` | no | `demo` | `demo` (any Bearer token works) or `clerk` |
 | `CLERK_SECRET_KEY` | if clerk | — | Clerk secret key |
 | `CLERK_WEBHOOK_SECRET` | if clerk | — | Clerk webhook signing secret |
