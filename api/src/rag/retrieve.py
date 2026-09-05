@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from sqlalchemy import text
 from src.db.base import async_session
+from src.config.env import settings
 from src.lib.embedder import embed_chunks, count_tokens, EMBEDDING_MODEL
 from src.lib.observability import log_request, measure_latency
 
@@ -21,7 +22,7 @@ async def retrieve_context(
     chatbot_id: str,
     query: str,
     top_k: int = 5,
-    min_similarity: float = 0.4,
+    min_similarity: float | None = None,
     request_context=None,
     tenant_id: str | None = None,
 ) -> list[RetrievedChunk]:
@@ -30,6 +31,9 @@ async def retrieve_context(
     Keyword-only hits (no vector match above threshold) pass through with similarity=0.0.
     Returns [] when nothing passes the threshold or FTS matches.
     """
+    if min_similarity is None:
+        min_similarity = settings.RETRIEVAL_MIN_SIMILARITY
+
     async with measure_latency() as lat:
         [query_embedding] = await embed_chunks([query])
     embed_latency = lat()

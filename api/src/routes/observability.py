@@ -3,7 +3,7 @@
 from datetime import timedelta, datetime, timezone
 from uuid import UUID
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select, func, literal_column
+from sqlalchemy import select, func, literal_column, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db.base import get_db
@@ -12,6 +12,18 @@ from src.db.tenant_scope import tenant_where
 from src.auth.authenticate import get_current_tenant, AuthenticatedTenant
 
 router = APIRouter(prefix="/observability", tags=["observability"])
+
+
+def _live_chatbot_ids(tenant_id: str):
+    """
+    Subquery of the tenant's non-deleted chatbot ids.
+
+    ObservationLog has no deleted_at of its own, so aggregates over it must be
+    restricted through Chatbot or a soft-deleted bot keeps reporting cost.
+    /breakdown/by-day and /logs already did this; /summary, /breakdown/by-chatbot
+    and /breakdown/by-phase did not.
+    """
+    return select(Chatbot.id).where(tenant_where(Chatbot, tenant_id))
 
 
 @router.get("/summary")
@@ -45,6 +57,12 @@ async def observability_summary(
                 "avg_latency_ms": 0,
             }
         conditions.append(ObservationLog.chatbot_id == chatbot_id)
+    else:
+        # Rows with no chatbot_id are tenant-level and are kept.
+        conditions.append(or_(
+            ObservationLog.chatbot_id.is_(None),
+            ObservationLog.chatbot_id.in_(_live_chatbot_ids(auth.tenant_id)),
+        ))
 
     agg = (await db.execute(
         select(
@@ -90,6 +108,7 @@ async def cost_by_chatbot(
         .where(
             ObservationLog.tenant_id == auth.tenant_id,
             ObservationLog.chatbot_id.isnot(None),
+            ObservationLog.chatbot_id.in_(_live_chatbot_ids(auth.tenant_id)),
             ObservationLog.created_at >= cutoff,
         )
         .group_by(ObservationLog.chatbot_id)
@@ -101,7 +120,9 @@ async def cost_by_chatbot(
     chatbots = {
         str(c.id): c.name
         for c in (await db.execute(
-            select(Chatbot).where(Chatbot.id.in_(chatbot_ids))
+            select(Chatbot).where(
+                tenant_where(Chatbot, auth.tenant_id), Chatbot.id.in_(chatbot_ids)
+            )
         )).scalars().all()
     }
 
@@ -135,6 +156,11 @@ async def cost_by_phase(
     ]
     if chatbot_id:
         conditions.append(ObservationLog.chatbot_id == chatbot_id)
+    else:
+        conditions.append(or_(
+            ObservationLog.chatbot_id.is_(None),
+            ObservationLog.chatbot_id.in_(_live_chatbot_ids(auth.tenant_id)),
+        ))
 
     rows = (await db.execute(
         select(

@@ -24,6 +24,14 @@ class Settings(BaseSettings):
     CLERK_SECRET_KEY: str = ""       # only needed when AUTH_MODE=clerk
     CLERK_WEBHOOK_SECRET: str = ""   # only needed when AUTH_MODE=clerk
 
+    # Retrieval
+    # Cosine floor for a vector hit to count. Corpus- and model-dependent:
+    # measured on the slice-spec corpus with text-embedding-3-small, answerable
+    # questions scored 0.343-0.613 at top-1 and unanswerable ones 0.169-0.284,
+    # so anything in (0.284, 0.343) separates them. The previous hard-coded 0.4
+    # sat above the low end of the answerable range and discarded correct hits.
+    RETRIEVAL_MIN_SIMILARITY: float = 0.32
+
     # App
     DASHBOARD_ORIGIN: str = "http://localhost:7860"
 

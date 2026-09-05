@@ -13,3 +13,7 @@
 __pycache__/
 *.pyc
 *.egg-info/
+
+# local backups of .env — these contain live API keys
+.env.bak*
+.env.*.bak

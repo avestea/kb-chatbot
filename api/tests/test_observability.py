@@ -387,3 +387,64 @@ async def test_tenant_isolation_logs(client, chatbot_id, tenant_id):
     items = resp.json()["items"]
     request_ids = [i["request_id"] for i in items]
     assert ctx.request_id not in request_ids
+
+
+@pytest.mark.asyncio
+async def test_soft_deleted_chatbot_excluded_from_observability(client):
+    """
+    A soft-deleted chatbot must stop reporting cost.
+
+    ObservationLog has no deleted_at of its own, so every aggregate over it has
+    to be restricted through Chatbot. /breakdown/by-day and /logs did this from
+    the start; /summary, /breakdown/by-chatbot and /breakdown/by-phase did not,
+    and a deleted bot kept appearing in the dashboard.
+    """
+    async with async_session_factory() as s:
+        await seed_cost_rates(s)
+
+    live = (await client.post("/api/v1/chatbots", json={"name": "Live Bot"},
+                              headers=HEADERS)).json()["chatbot"]
+    doomed = (await client.post("/api/v1/chatbots", json={"name": "Doomed Bot"},
+                                headers=HEADERS)).json()["chatbot"]
+    tenant = live["tenant_id"]
+
+    async with async_session_factory() as s:
+        for bot_id in (live["id"], doomed["id"]):
+            await log_request(
+                s, tenant_id=tenant, chatbot_id=bot_id,
+                provider="openai", model="text-embedding-3-small",
+                phase="embed_query", direction="input", tokens=100,
+                latency_ms=10, request_context=RequestContext.new(),
+            )
+        await s.commit()
+
+    before = (await client.get("/api/v1/observability/breakdown/by-chatbot",
+                               headers=HEADERS)).json()
+    assert {r["chatbot_name"] for r in before} >= {"Live Bot", "Doomed Bot"}
+    doomed_requests = next(r["total_requests"] for r in before
+                           if r["chatbot_id"] == doomed["id"])
+    summary_before = (await client.get("/api/v1/observability/summary",
+                                       headers=HEADERS)).json()["total_requests"]
+
+    assert (await client.delete(f"/api/v1/chatbots/{doomed['id']}",
+                                headers=HEADERS)).status_code == 204
+
+    after = (await client.get("/api/v1/observability/breakdown/by-chatbot",
+                              headers=HEADERS)).json()
+    names = {r["chatbot_name"] for r in after}
+    assert "Doomed Bot" not in names, "soft-deleted chatbot still reports cost"
+    assert "Live Bot" in names
+
+    ids = {r["chatbot_id"] for r in after}
+    assert doomed["id"] not in ids
+
+    # /summary and /breakdown/by-phase must drop the same rows. They are not
+    # comparable to by-chatbot's total: logs with a null chatbot_id belong to
+    # the tenant and are counted by both, but have no chatbot to group under.
+    summary_after = (await client.get("/api/v1/observability/summary",
+                                      headers=HEADERS)).json()["total_requests"]
+    assert summary_after == summary_before - doomed_requests
+
+    phases = (await client.get("/api/v1/observability/breakdown/by-phase",
+                               headers=HEADERS)).json()
+    assert sum(p["total_requests"] for p in phases) == summary_after
