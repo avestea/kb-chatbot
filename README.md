@@ -2,6 +2,8 @@
 
 A SaaS knowledge base chatbot builder. Operators upload documents (PDF, DOCX, HTML, TXT) and end-users chat against them via a RAG (Retrieval-Augmented Generation) pipeline. Everything runs in Docker — the only host dependency is Docker.
 
+The write-up is at [The chatbot was the easy part](https://alexvestea.com/posts/measuring-a-rag-chatbot/): the RAG pipeline was a weekend of plumbing, and knowing whether the answers are any good turned out to be the actual work.
+
 > [!WARNING]
 > **The default mode has no authentication.** With `AUTH_MODE=demo`, *any*
 > string sent as `Authorization: Bearer <token>` is accepted and silently
